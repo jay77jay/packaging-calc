@@ -97,7 +97,7 @@
    - 出貨明細自動找有「單號＋數量」表頭的分頁，依物流方式分通路計算
    - ?demo=1：假資料測試模式，不連資料庫
    ===================================================================== */
-const PKG_VERSION = 'v2.0';
+const PKG_VERSION = 'v2.1';
 const DEMO = new URLSearchParams(location.search).has('demo') || /demo/.test(location.hash);
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -121,7 +121,7 @@ const DEFAULT_RULES = () => ({
     {ch:'', min:11, max:20, pkg:'俬儲紙箱XL'},
     {ch:'', min:21, max:9999, pkg:'俬儲紙箱XXL'},
   ],
-  combos: [], points: [], identify: [],
+  combos: [], points: [], extras: [], identify: [],
 });
 
 /* ================= 資料層：Firestore 或測試假資料 ================= */
@@ -177,6 +177,9 @@ function demoApi(){
     {id:'p4', name:'俬儲紙箱L', price:15, category:'耗材', order:3},
     {id:'p5', name:'俬儲紙箱XL', price:20, category:'耗材', order:4},
     {id:'p6', name:'俬儲紙箱XXL', price:25, category:'耗材', order:5},
+    {id:'p7', name:'寄件處理[超商](小)(<60)', price:5, category:'服務費', order:6},
+    {id:'p8', name:'寄件處理[超商](中)(61-90)', price:10, category:'服務費', order:7},
+    {id:'p9', name:'寄件處理[超商](大)(91-105)', price:20, category:'服務費', order:8},
   ];
   return {
     onAuth(cb){ setTimeout(() => cb({email:'demo@test', displayName:'測試員'}), 0); },
@@ -445,6 +448,8 @@ function applyFinal(){
   S.orders.forEach((o, i) => {
     o.idx = i;
     o.pkg = S.overrides[o.id] || o.auto;
+    // 附加工序：通路相符（空白＝全部）且包材相符（空白＝不論包材）的每一列都套用，每單 1 次
+    o.extras = R ? [...new Set((R.extras || []).filter(e => (!e.ch || e.ch === o.ch) && (!e.pkg || (o.pkg && e.pkg === o.pkg))).map(e => e.proc))] : [];
     o.edited = !!S.overrides[o.id] && S.overrides[o.id] !== o.auto;
     o.flags = o.flags.filter(f => f !== 'over');
     if(R && o.ch && o.pkg){
@@ -505,12 +510,10 @@ function calcHtml(){
   const edited = S.orders.filter(o => o.edited).length;
   const dates = [...new Set(S.orders.flatMap(o => [...o.dates]))].sort();
   // 依 ERP 工序順序排列的彙總
-  const tally = {}; S.orders.forEach(o => { if(o.pkg) tally[o.pkg] = (tally[o.pkg] || 0) + 1; });
-  const ordered = pkgOptions();
-  Object.keys(tally).forEach(n => { if(!ordered.includes(n)) ordered.push(n); });
+  const {tally, ordered} = tallyAll();
   const notInErp = Object.keys(tally).filter(n => !S.procs.some(p => p.name === n));
 
-  h += `<div class="card"><h3>🧾 工序計費要輸入的數量 <span class="sub">依 ERP「${esc(cust?.name)}」耗材工序順序</span></h3>
+  h += `<div class="card"><h3>🧾 工序計費要輸入的數量 <span class="sub">包材＋附加工序，依 ERP「${esc(cust?.name)}」工序順序</span></h3>
     <div class="stats">
       <div class="stat"><div class="l">訂單數</div><div class="v">${S.orders.length}</div></div>
       <div class="stat"><div class="l">商品總件數</div><div class="v">${S.orders.reduce((s, o) => s + o.qty, 0)}</div></div>
@@ -550,7 +553,8 @@ function calcHtml(){
           <td><select onchange="setOv(${o.idx}, this.value)">
               <option value="">${o.auto ? '依規則：' + esc(o.auto) : '— 請選擇 —'}</option>
               ${opts.map(n => `<option value="${esc(n)}" ${S.overrides[o.id] === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
-            </select><div class="small muted" style="margin-top:3px">${esc(o.why || '')}</div></td>
+            </select><div class="small muted" style="margin-top:3px">${esc(o.why || '')}</div>
+            ${(o.extras || []).map(n => `<div><span class="chip blue">＋ ${esc(n)}</span></div>`).join('')}</td>
           <td>${o.edited ? '<span class="chip blue">已手動修改</span>' : ''}${o.flags.map(f => `<span class="chip ${FLAG[f].c}">${FLAG[f].t}</span>`).join('')}</td>
         </tr>`; }).join('')}
       </tbody></table></div></div>`;
@@ -558,9 +562,16 @@ function calcHtml(){
   return h;
 }
 
+// 包材＋附加工序的數量，依 ERP 工序順序排列（耗材工序即使 0 也列出）
+function tallyAll(){
+  const tally = {};
+  S.orders.forEach(o => { [o.pkg, ...(o.extras || [])].forEach(n => { if(n) tally[n] = (tally[n] || 0) + 1; }); });
+  const ordered = S.procs.filter(p => isConsumable(p) || tally[p.name]).map(p => p.name);
+  Object.keys(tally).forEach(n => { if(!ordered.includes(n)) ordered.push(n); });
+  return {tally, ordered};
+}
 function summaryLines(){
-  const tally = {}; S.orders.forEach(o => { if(o.pkg) tally[o.pkg] = (tally[o.pkg] || 0) + 1; });
-  const ordered = pkgOptions(); Object.keys(tally).forEach(n => { if(!ordered.includes(n)) ordered.push(n); });
+  const {tally, ordered} = tallyAll();
   return ordered.filter(n => tally[n]).map(n => [n, tally[n]]);
 }
 async function copySummary(){
@@ -576,11 +587,11 @@ function exportResult(){
   S.sheets.forEach(sh => {
     if(!sh.ok || !sh.use) return;
     const ws = wb.Sheets[sh.name], c = sh.lastCol + 1;
-    XLSX.utils.sheet_add_aoa(ws, [['包材']], {origin:{r:sh.headerRow, c}});
-    sh.rows.forEach(row => { const o = byId.get(row.id); XLSX.utils.sheet_add_aoa(ws, [[o ? (o.pkg || '無對應規則') + (o.edited ? '（手動）' : '') : '']], {origin:{r:row.r, c}}); });
+    XLSX.utils.sheet_add_aoa(ws, [['包材', '附加工序']], {origin:{r:sh.headerRow, c}});
+    sh.rows.forEach(row => { const o = byId.get(row.id); XLSX.utils.sheet_add_aoa(ws, [o ? [(o.pkg || '無對應規則') + (o.edited ? '（手動）' : ''), (o.extras || []).join('、')] : ['', '']], {origin:{r:row.r, c}}); });
   });
-  const aoa = [['包材', '數量'], ...summaryLines(), [], ['單號', '收件人', '通路', '件數', '包材', '提醒']];
-  S.orders.forEach(o => aoa.push([o.id, o.recv, o.ch || '未分類', o.qty, o.pkg || '', [o.edited ? '已手動修改' : '', ...o.flags.map(f => FLAG[f].t)].filter(Boolean).join('、')]));
+  const aoa = [['工序', '數量'], ...summaryLines(), [], ['單號', '收件人', '通路', '件數', '包材', '附加工序', '提醒']];
+  S.orders.forEach(o => aoa.push([o.id, o.recv, o.ch || '未分類', o.qty, o.pkg || '', (o.extras || []).join('、'), [o.edited ? '已手動修改' : '', ...o.flags.map(f => FLAG[f].t)].filter(Boolean).join('、')]));
   const name = '包材彙總';
   if(wb.SheetNames.includes(name)) delete wb.Sheets[name], wb.SheetNames.splice(wb.SheetNames.indexOf(name), 1);
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), name);
@@ -593,6 +604,7 @@ const RULE_SHEETS = {
   rules:   {sheet:'件數規則', head:['通路（空白＝所有通路共用）', '下限', '上限', '包材']},
   combos:  {sheet:'組合規則', head:['通路（空白＝所有通路）', '關鍵字（逗號分隔，全部出現才套用）', '包材']},
   points:  {sheet:'商品點數', head:['商品編號', '商品名稱關鍵字', '點數']},
+  extras:  {sheet:'附加工序', head:['通路（空白＝所有通路）', '包材（空白＝不論包材）', '附加工序（ERP 工序名稱，每單算 1）']},
   identify:{sheet:'識別關鍵字', head:['關鍵字（寄件人、單號開頭或檔名會出現的字）']},
 };
 const rowsOf = {
@@ -600,6 +612,7 @@ const rowsOf = {
   rules:    R => (R.rules || []).map(r => [r.ch || '', r.min, r.max, r.pkg]),
   combos:   R => (R.combos || []).map(c => [c.ch || '', c.keywords, c.pkg]),
   points:   R => (R.points || []).map(p => [p.sku || '', p.kw || '', p.pt]),
+  extras:   R => (R.extras || []).map(e => [e.ch || '', e.pkg || '', e.proc]),
   identify: R => (R.identify || []).map(k => [k]),
 };
 
@@ -617,6 +630,7 @@ function downloadRules(){
     ['・計算順序：先比「組合規則」（由上往下，第一條符合的就用），沒有符合再用「件數規則」。'],
     ['・件數規則：該通路有專屬規則就只用專屬的，沒有就用「通路空白」的共用規則；上限填 9999 代表以上。'],
     ['・商品點數：整張空白＝每件算 1；有填的話，件數改用「點數 × 數量」加總後無條件進位，沒對到的商品以 1 點計並提醒。'],
+    ['・附加工序：通路和包材都相符（空白＝不限）的每一列都會套用，每單加 1，例如超取＋紙箱M → 寄件處理[超商](小)。'],
     ['・通路：先比明細的「物流方式」欄，再比分頁名稱；通路名稱本身也會當作關鍵字。'],
     ['・上傳後會整份取代目前的規則，請先下載最新版再修改。'], [],
     ['ERP 工序名稱', '分類', '單價'],
@@ -657,7 +671,7 @@ function parseRulesWb(wb){
     if(!procNames.has(name)) errors.push(`${where}：「${name}」不是這個客戶的 ERP 工序名稱`);
     else if(!consum.has(name)) warns.push(`${where}：「${name}」在 ERP 不是「耗材」分類`);
   };
-  const R = {channels:[], rules:[], combos:[], points:[], identify:[]};
+  const R = {channels:[], rules:[], combos:[], points:[], extras:[], identify:[]};
   const ch = sheet('channels');
   if(!ch) errors.push('缺少「通路設定」分頁');
   else ch.forEach(({r, line}) => {
@@ -698,6 +712,14 @@ function parseRulesWb(wb){
     if(!r[0] && !r[1]) errors.push(`${w}：商品編號和關鍵字至少填一個`);
     if(!Number.isFinite(pt) || r[2] === '' || pt < 0) errors.push(`${w}：點數要填 0 以上的數字`);
     R.points.push({sku:String(r[0] || ''), kw:String(r[1] || ''), pt});
+  });
+  (sheet('extras') || []).forEach(({r, line}) => {
+    const w = `附加工序第 ${line} 列`, c = String(r[0] || ''), pkg = String(r[1] || ''), proc = String(r[2] || '');
+    if(c && !chNames.has(c)) errors.push(`${w}：通路「${c}」沒有在通路設定裡`);
+    if(pkg) chkPkg(pkg, w);
+    if(!proc) errors.push(`${w}：附加工序空白`);
+    else if(!procNames.has(proc)) errors.push(`${w}：「${proc}」不是這個客戶的 ERP 工序名稱`);
+    R.extras.push({ch:c, pkg, proc});
   });
   (sheet('identify') || []).forEach(({r}) => { if(r[0] !== '') R.identify.push(String(r[0])); });
   return {rules:R, errors, warns};
@@ -766,6 +788,7 @@ function rulesHtml(){
       <div class="card"><h3>件數規則</h3>${tableHtml(['通路', '下限', '上限', '包材'], rowsOf.rules(R).map(r => [r[0] || '（共用）', r[1], r[2] >= 9999 ? '以上' : r[2], r[3]]))}</div>
       <div class="card"><h3>組合規則</h3>${tableHtml(['通路', '關鍵字', '包材'], rowsOf.combos(R).map(r => [r[0] || '（全部）', r[1], r[2]]))}</div>
       <div class="card"><h3>商品點數 <span class="sub">空白＝每件算 1</span></h3>${tableHtml(['商品編號', '商品名稱關鍵字', '點數'], rowsOf.points(R))}</div>
+      <div class="card"><h3>附加工序 <span class="sub">依通路＋包材，每單自動加 1</span></h3>${tableHtml(['通路', '包材', '附加工序'], rowsOf.extras(R).map(r => [r[0] || '（全部）', r[1] || '（不論包材）', r[2]]))}</div>
       <div class="card"><h3>識別關鍵字</h3>${tableHtml(['關鍵字'], rowsOf.identify(R))}</div>`;
   }
   const cons = S.procs.filter(isConsumable);
