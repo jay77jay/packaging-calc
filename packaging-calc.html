@@ -98,7 +98,7 @@
    - 📐 專案試算：大專案依商品尺寸事先估包材（合併自 packaging-calculator.html、包材需求評估.html）
    - ?demo=1：假資料測試模式，不連資料庫
    ===================================================================== */
-const PKG_VERSION = 'v2.3';
+const PKG_VERSION = 'v2.3.1';
 const DEMO = new URLSearchParams(location.search).has('demo') || /demo/.test(location.hash);
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -159,7 +159,8 @@ function fireApi(){
       const [u, g] = await Promise.all([db.collection('hub_settings').doc('users').get(), db.collection('hub_settings').doc('global').get().catch(() => null)]);
       const users = u.exists ? u.data() : {}, email = (user.email || '').toLowerCase();
       const rec = users[email] || Object.entries(users).find(([k]) => k.toLowerCase() === email)?.[1];
-      const admins = ((g && g.exists && g.data().superAdmins) || []).map(x => String(x).toLowerCase());
+      // Hub 的超級管理員存在 hub_settings/global.admins（v2.3 以前誤讀 superAdmins，管理員被當一般帳號）
+      const gd = (g && g.exists && g.data()) || {}, admins = [...(gd.admins || []), ...(gd.superAdmins || [])].map(x => String(x).toLowerCase());
       return {ok: !!rec || admins.includes(email), admin: admins.includes(email), blocked: !!(rec && (rec.blockedSystems || []).includes('packaging')),
         name: (rec && rec.name) || user.displayName || email, warehouses: ((rec && rec.warehouses) || []).map(String).filter(Boolean)};
     },
