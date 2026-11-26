@@ -97,7 +97,7 @@
    - 出貨明細自動找有「單號＋數量」表頭的分頁，依物流方式分通路計算
    - ?demo=1：假資料測試模式，不連資料庫
    ===================================================================== */
-const PKG_VERSION = 'v2.1';
+const PKG_VERSION = 'v2.2';
 const DEMO = new URLSearchParams(location.search).has('demo') || /demo/.test(location.hash);
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -108,20 +108,23 @@ function toast(msg, ms = 2500){ const t = $('toast'); t.textContent = msg; t.sty
 const splitKw = s => String(s ?? '').split(/[,，、\n]/).map(x => x.trim()).filter(Boolean);
 const isConsumable = p => p.category === '耗材' || (!p.category && /紙箱|箱|袋/.test(p.name || ''));
 
-/* ================= 預設規則（新客戶的範本，沿用暮雨 v1.0） ================= */
+/* ================= 預設規則（新客戶的範本，件數區間沿用暮雨 v1.0，名稱用 ERP 標準工序名稱） ================= */
 const DEFAULT_RULES = () => ({
   channels: [
     {name:'宅配', keywords:['宅配','黑貓','新竹','郵局','宅急便'], maxPkg:''},
     {name:'超取', keywords:['超商','超取','7-11','711','全家','萊爾富','OK'], maxPkg:''},
   ],
   rules: [
-    {ch:'', min:1, max:2, pkg:'破壞袋$4'},
-    {ch:'', min:3, max:5, pkg:'俬儲紙箱M'},
-    {ch:'', min:6, max:10, pkg:'俬儲紙箱L'},
-    {ch:'', min:11, max:20, pkg:'俬儲紙箱XL'},
-    {ch:'', min:21, max:9999, pkg:'俬儲紙箱XXL'},
+    {ch:'', min:1, max:2, pkg:'破壞袋-4元'},
+    {ch:'', min:3, max:5, pkg:'俬儲紙箱[M](46-60)'},
+    {ch:'', min:6, max:10, pkg:'俬儲紙箱[L](61-75)'},
+    {ch:'', min:11, max:20, pkg:'俬儲紙箱[XL](76-90)'},
+    {ch:'', min:21, max:9999, pkg:'俬儲紙箱[XXL](91-105)'},
   ],
-  combos: [], points: [], extras: [], identify: [],
+  combos: [], points: [],
+  // 約九成客戶每單收訂單處理費；這個客戶沒有這個工序時，上傳會擋下來，刪掉這列即可
+  extras: [{ch:'', pkg:'', proc:'訂單處理費'}],
+  identify: [],
 });
 
 /* ================= 資料層：Firestore 或測試假資料 ================= */
@@ -171,12 +174,12 @@ function demoApi(){
   const K = 'pkg_calc_demo_rules';
   const load = () => { try{ return JSON.parse(localStorage.getItem(K) || '{}'); }catch(e){ return {}; } };
   const procs = [
-    {id:'p1', name:'出貨處理費', price:15, category:'服務費', order:0},
-    {id:'p2', name:'破壞袋$4', price:4, category:'耗材', order:1},
-    {id:'p3', name:'俬儲紙箱M', price:12, category:'耗材', order:2},
-    {id:'p4', name:'俬儲紙箱L', price:15, category:'耗材', order:3},
-    {id:'p5', name:'俬儲紙箱XL', price:20, category:'耗材', order:4},
-    {id:'p6', name:'俬儲紙箱XXL', price:25, category:'耗材', order:5},
+    {id:'p1', name:'訂單處理費', price:15, category:'服務費', order:0},
+    {id:'p2', name:'破壞袋-4元', price:4, category:'耗材', order:1},
+    {id:'p3', name:'俬儲紙箱[M](46-60)', price:12, category:'耗材', order:2},
+    {id:'p4', name:'俬儲紙箱[L](61-75)', price:15, category:'耗材', order:3},
+    {id:'p5', name:'俬儲紙箱[XL](76-90)', price:20, category:'耗材', order:4},
+    {id:'p6', name:'俬儲紙箱[XXL](91-105)', price:25, category:'耗材', order:5},
     {id:'p7', name:'寄件處理[超商](小)(<60)', price:5, category:'服務費', order:6},
     {id:'p8', name:'寄件處理[超商](中)(61-90)', price:10, category:'服務費', order:7},
     {id:'p9', name:'寄件處理[超商](大)(91-105)', price:20, category:'服務費', order:8},
