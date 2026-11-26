@@ -95,9 +95,10 @@
    - 依倉庫／客戶讀 ERP（ezfun-warehouse-billing）的耗材工序當包材選項
    - 規則存在 Firestore pkg_calc_rules/{cid}，用 Excel 上傳／下載維護
    - 出貨明細自動找有「單號＋數量」表頭的分頁，依物流方式分通路計算
+   - 📐 專案試算：大專案依商品尺寸事先估包材（合併自 packaging-calculator.html、包材需求評估.html）
    - ?demo=1：假資料測試模式，不連資料庫
    ===================================================================== */
-const PKG_VERSION = 'v2.2';
+const PKG_VERSION = 'v2.3';
 const DEMO = new URLSearchParams(location.search).has('demo') || /demo/.test(location.hash);
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -276,12 +277,16 @@ function renderShell(){
     <div class="nav-tabs">
       <div class="nav-tab ${S.tab === 'calc' ? 'active' : ''}" onclick="switchTab('calc')">🧮 計算包材</div>
       <div class="nav-tab ${S.tab === 'rules' ? 'active' : ''}" onclick="switchTab('rules')">⚙️ 規則設定</div>
+      <div class="nav-tab ${S.tab === 'project' ? 'active' : ''}" onclick="switchTab('project')">📐 專案試算</div>
     </div>
     <div class="main" id="app-main"></div>`;
 }
 function switchTab(t){ S.tab = t; renderShell(); render(); }
 function render(){
   const m = $('app-main'); if(!m) return;
+  m.oninput = m.onchange = null;
+  // 專案試算不分客戶，不需要先選客戶
+  if(S.tab === 'project'){ m.innerHTML = PJ.html(); PJ.mount(); return; }
   if(!S.cid){ m.innerHTML = '<div class="center muted">請先在上方選擇倉庫和客戶</div>'; return; }
   m.innerHTML = S.tab === 'calc' ? calcHtml() : rulesHtml();
 }
@@ -800,6 +805,437 @@ function rulesHtml(){
     ${tableHtml(['工序名稱', '分類', '單價'], S.procs.map(p => [p.name, p.category || (isConsumable(p) ? '耗材（推測）' : '未分類'), p.price ?? '']))}</div>`;
   return h;
 }
+
+/* =====================================================================
+   📐 專案試算（大專案事先評估包材）
+   合併自 packaging-calculator.html（包材需求試算）與 包材需求評估.html：
+   - 依商品尺寸選箱：紙箱外徑扣楞厚換內徑、可多件一箱、報價／成本分開、備品、緩衝材
+   - 裸裝商品依最長邊加外加空間（評估系統）、組合出貨 A＋B、mm 單位、空間利用率
+   - 不需要多人同步：資料存在這台瀏覽器（localStorage），可下載／匯入備份
+   ===================================================================== */
+const PJ = (() => {
+  const FLUTE_T = {E:0.15, B:0.3, A:0.5, AB:0.8};
+  const DEFAULT_TIERS = [
+    {name:'XS', max:35, price:8}, {name:'S', max:45, price:10}, {name:'M', max:60, price:12},
+    {name:'L', max:75, price:15}, {name:'XL', max:90, price:18}, {name:'XXL', max:105, price:20}, {name:'特大', max:null, price:40},
+  ];
+  const DEFAULT_PAD = [
+    {label:'小型精密件', maxDim:15, perSide:3}, {label:'中小型商品', maxDim:30, perSide:4}, {label:'中型商品', maxDim:60, perSide:6},
+    {label:'大型商品', maxDim:100, perSide:10}, {label:'特大型／機械類', maxDim:null, perSide:12},
+  ];
+  const C = (src, code, L, W, H, flute, cost, note, price = null) => ({kind:'carton', src, grp:'紙箱', code, L, W, H, flute, cost, note, price});
+  const SX = (code, L, W, H, price, note = '') => C('俬儲', code, L, W, H, 'B', price - 3, note ? note + '；成本=報價−3 推算' : '成本=報價−3 推算', price);
+  const DEFAULT_CATALOG = [
+    SX('F11',11,7,4,8), SX('P7',17,8,9,8), SX('D10',20,10,10,10), SX('A7',18,14,12,10,'紙箱小將'),
+    SX('D12',23,17,8,12), SX('N1',25,20,15,12,'紙箱小將'), SX('D8',28,22,12,15), SX('P5',30,20,15,15,'紙箱小將'),
+    SX('N5',30,25,15,15,'紙箱小將'), SX('A5',35,25,20,18,'紙箱小將'), SX('A3',40,30,20,18,'紙箱小將'),
+    SX('A8',30,30,30,18,'紙箱小將'), SX('45×30×20',45,30,20,20,'代號未定'), {...SX('A1',45,30,30,20,'紙箱小將 A1（120入13.5｜40入15.5｜20入18）'), iL:44.4, iW:29, iH:28.7},
+    {kind:'special', src:'俬儲', grp:'特大', code:'特規A', price:40, cost:37, note:'比XXL大，標準品都裝不下時的備案'},
+    {kind:'special', src:'俬儲', grp:'特大', code:'特規B', price:60, cost:57, note:'海關用大箱'},
+    {...C('紙箱小將','小將 P10 43×27×27',43,27,27,'B',12.5,'120入1500｜80入1040｜40入560｜20入340；product-detail/472'), iL:42.4, iW:26.4, iH:26},
+    {...C('紙箱小將','小將 P2 39.5×27.5×23',39.5,27.5,23,'A',19.2,'100入1920｜50入995｜20入420；product-detail/105'), iL:38.5, iW:26.5, iH:21.5},
+    {...C('紙箱小將','小將 A28 46×32.5×26',46,32.5,26,'A',24,'60入1440｜40入1040｜20入540；product-detail/102'), iL:45, iW:31.5, iH:24.8},
+    {...C('紙箱小將','小將 A20 50×40×30',50,40,30,'A',35.5,'40入1420｜100入3500｜10入400；product-detail/100'), iL:49, iW:38.4, iH:28.4},
+    {...C('紙箱小將','小將 A26 50×45×36',50,45,36,'A',43,'40入1720｜100入4300｜10入460；product-detail/101'), iL:49, iW:44, iH:34.8},
+    {...C('紙箱龍','龍 訂做 內徑32×31×14',32.6,31.6,14.6,'B',16,'三層B浪，594～624個試算16元/個，7工作天'), iL:32, iW:31, iH:14},
+    {...C('紙箱龍','龍 訂做 內徑35×26×22',35.6,26.6,22.6,'B',25,'三層B浪，102個試算25元/個'), iL:35, iW:26, iH:22},
+    {...C('紙箱龍','龍 訂做 內徑42×32×29',42.6,32.6,29.6,'B',39,'三層B浪，37個試算39元/個'), iL:42, iW:32, iH:29},
+    {...C('紙箱龍','龍 訂做 內徑42×32×29 五層',43.6,33.6,30.6,'AB',53,'五層AB浪，37個試算53元/個'), iL:42, iW:32, iH:29},
+    ...[['口袋型氣泡袋','小氣泡袋',15,10,3],['口袋型氣泡袋','小氣泡袋',20,15,3],['口袋型氣泡袋','中氣泡袋',25,20,5],['口袋型氣泡袋','中氣泡袋',35,25,5],
+        ['口袋型氣泡袋','大氣泡袋',40,30,8],['口袋型氣泡袋','大氣泡袋',45,35,8],['氣泡袋信封','小氣泡信封',13,11,5],['氣泡袋信封','小氣泡信封',18,15,5],
+        ['氣泡袋信封','中氣泡信封',23,18,8],['氣泡袋信封','中氣泡信封',25,20,8],['破壞袋','小破壞袋',14,13,2],['破壞袋','小破壞袋',26,17,2],
+        ['破壞袋','中破壞袋',31,25,4],['破壞袋','中破壞袋',38,28,4],['破壞袋','中破壞袋',40,30,4],['破壞袋','大破壞袋',45,35,6],
+        ['破壞袋','大破壞袋',48,35,6],['破壞袋','大破壞袋',61,40,6]]
+      .map(([grp, code, L, W, price]) => ({kind:'bag', src:'俬儲', grp, code, L, W, price, cost:null, note:''})),
+    {kind:'filler', src:'俬儲', grp:'剪裁式氣泡袋', code:'剪裁氣泡袋', price:2, cost:null, note:'緩衝填充，每箱一份'},
+  ];
+  const DEFAULT_OPT = {priority:'quote', web:true, markup:3, roundTo:1, clear:0, buffer:5, filler:true, fillGap:3, bags:false};
+
+  const sortDesc = a => [...a].sort((x, y) => y - x);
+  const fmt = n => (Math.round(n * 10) / 10).toString();
+  const money = n => (Math.round(n * 10) / 10).toLocaleString();
+  const hasCost = e => e.cost !== null && e.cost !== undefined && e.cost !== '' && !isNaN(+e.cost);
+  const sizeOf = e => e.kind === 'carton' ? `${e.L}×${e.W}×${e.H}` : e.kind === 'bag' ? `${e.L}×${e.W}` : (e.note || '');
+  const hasInner = e => [e.iL, e.iW, e.iH].every(v => v !== null && v !== undefined && v !== '' && +v > 0);
+  const innerOf = e => { if(hasInner(e)) return [+e.iL, +e.iW, +e.iH]; const t = FLUTE_T[e.flute] ?? 0.3; return [e.L, e.W, e.H].map(v => Math.max(0, +v - 2 * t)); };
+  const ceilTo = (v, u) => Math.ceil(v / u - 1e-9) * u;
+  const toCm = it => [it.L, it.W, it.H].map(v => (+v || 0) * (it.unit === 'mm' ? 0.1 : 1));
+
+  // ---------- 狀態（localStorage） ----------
+  const K = {cat:'pkg_pj_catalog_v1', items:'pkg_pj_items_v1', opt:'pkg_pj_opt_v1', tiers:'pkg_pj_tiers_v1', pad:'pkg_pj_pad_v1', bundles:'pkg_pj_bundles_v1'};
+  const ls = {get(k){ try{ return JSON.parse(localStorage.getItem(k)); }catch(e){ return null; } }, set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }};
+  const clone = o => JSON.parse(JSON.stringify(o));
+  let catalog = ls.get(K.cat) || clone(DEFAULT_CATALOG).map(e => ({...e, on:true}));
+  let tiers = ls.get(K.tiers) || clone(DEFAULT_TIERS);
+  let pad = ls.get(K.pad) || clone(DEFAULT_PAD);
+  let items = ls.get(K.items) || [];
+  let bundles = ls.get(K.bundles) || [];
+  let opt = {...DEFAULT_OPT, ...(ls.get(K.opt) || {})};
+  let last = null;   // 最近一次計算結果（給下載用）
+  const saveAll = () => { ls.set(K.cat, catalog); ls.set(K.tiers, tiers); ls.set(K.pad, pad); ls.set(K.items, items); ls.set(K.bundles, bundles); ls.set(K.opt, opt); };
+
+  // ---------- 計算核心 ----------
+  function quoteInfo(e){
+    if(e.price !== null && e.price !== undefined && e.price !== '' && !isNaN(+e.price)) return {q:+e.price, basis:'定價'};
+    if(hasCost(e)) return {q:ceilTo(+e.cost + opt.markup, opt.roundTo || 1), basis:'成本+' + opt.markup};
+    if(e.kind === 'carton'){ const sum = (+e.L) + (+e.W) + (+e.H);
+      for(const t of tiers) if(t.max === null || t.max === '' || sum <= +t.max) return {q:+t.price, basis:'級距推估'}; }
+    return {q:0, basis:'未知'};
+  }
+  // 裸裝外加空間：依最長邊找級距，每邊加 perSide
+  function padFor(dimsCm){
+    const mx = Math.max(...dimsCm);
+    const rs = pad.slice().sort((a, b) => (a.maxDim ?? 1e9) - (b.maxDim ?? 1e9));
+    const r = rs.find(x => x.maxDim === null || x.maxDim === '' || mx <= +x.maxDim) || rs[rs.length - 1];
+    return r ? {per:+r.perSide || 0, label:r.label} : {per:0, label:''};
+  }
+  function blockOptions(dims, n){
+    const perms = [[0,1,2],[0,2,1],[1,0,2],[1,2,0],[2,0,1],[2,1,0]];
+    const seen = new Set(), out = [];
+    for(let p = 1; p <= n; p++){ if(n % p) continue;
+      for(let q = 1; q <= n / p; q++){ if((n / p) % q) continue; const r = n / p / q;
+        for(const pm of perms){ const b = sortDesc([dims[pm[0]] * p, dims[pm[1]] * q, dims[pm[2]] * r]); const k = b.join(','); if(!seen.has(k)){ seen.add(k); out.push(b); } } } }
+    return out;
+  }
+  function fitCheck(block, e, clear){
+    const b = block.map(v => v + 2 * clear);
+    if(e.kind === 'carton'){ const box = sortDesc(innerOf(e)); const gaps = box.map((v, i) => v - b[i]);
+      return {fit:gaps.every(g => g >= 0), gaps, over:gaps.map(g => Math.max(0, -g)), minGap:Math.min(...gaps)}; }
+    if(e.kind === 'bag'){ const [bl, bw] = sortDesc([+e.L, +e.W]); const g1 = bl - (b[0] + b[2]), g2 = bw - (b[1] + b[2]);
+      return {fit:g1 >= 0 && g2 >= 0, gaps:[g1, g2], over:[Math.max(0, -g1), Math.max(0, -g2)], minGap:Math.min(g1, g2)}; }
+    return {fit:false};
+  }
+  function evaluateItem(item){
+    const dims = toCm(item);
+    const n = Math.max(1, Math.floor(item.per || 1));
+    const qty = Math.max(0, Math.floor(item.qty || 0));
+    const boxes = Math.ceil(qty / n);
+    const pd = item.bare ? padFor(dims) : {per:0, label:''};
+    const clear = opt.clear + pd.per;
+    const blocks = blockOptions(dims, n);
+    const cands = [];
+    catalog.forEach(e => {
+      if(!e.on) return;
+      if(e.src !== '俬儲' && !opt.web) return;
+      if(e.kind !== 'carton' && !(e.kind === 'bag' && opt.bags)) return;
+      let best = null;
+      for(const bl of blocks){ const r = fitCheck(bl, e, clear); if(r.fit && (!best || r.minGap > best.minGap)) best = {...r, block:bl}; }
+      if(best){ const qi = quoteInfo(e); const c = hasCost(e) ? +e.cost : null; cands.push({e, ...best, quote:qi.q, basis:qi.basis, cost:c, margin:c === null ? null : qi.q - c}); }
+    });
+    const vol = e => e.kind === 'carton' ? e.L * e.W * e.H : e.L * e.W;
+    const INF = 1e9, cv = x => x.cost === null ? INF : x.cost;
+    const tight = x => x.minGap < 1 ? 1 : 0, own = x => x.e.src === '俬儲' ? 0 : 1, unk = x => x.cost === null ? 1 : 0;
+    const cmp = {
+      quote:(a, b) => tight(a) - tight(b) || unk(a) - unk(b) || a.quote - b.quote || own(a) - own(b) || cv(a) - cv(b) || vol(a.e) - vol(b.e),
+      cost:(a, b) => tight(a) - tight(b) || unk(a) - unk(b) || cv(a) - cv(b) || a.quote - b.quote || vol(a.e) - vol(b.e),
+    }[opt.priority] || ((a, b) => a.quote - b.quote);
+    cands.sort(cmp);
+    const warns = [];
+    let pick = cands[0] || null;
+    if(!pick){
+      let nearest = null;
+      catalog.forEach(e => { if(!e.on || e.kind !== 'carton' || (e.src !== '俬儲' && !opt.web)) return;
+        for(const bl of blocks){ const r = fitCheck(bl, e, clear); const s = r.over.reduce((a, b) => a + b, 0); if(!nearest || s < nearest.sum) nearest = {e, sum:s, over:r.over}; } });
+      const sp = catalog.find(e => e.on && e.kind === 'special');
+      if(sp){ pick = {e:sp, special:true, quote:quoteInfo(sp).q, basis:'定價', cost:hasCost(sp) ? +sp.cost : null}; pick.margin = pick.cost === null ? null : pick.quote - pick.cost; }
+      warns.push({lv:'red', t:'清單內沒有裝得下的箱子，需特規／訂做'});
+      if(nearest){ const lab = ['長', '寬', '高']; const d = nearest.over.map((v, i) => v > 0 ? `${lab[i]}差 ${fmt(v)}cm` : null).filter(Boolean).join('、');
+        warns.push({lv:'warn', t:`最接近 ${nearest.e.code}：內徑${d}`}); }
+    } else {
+      if(pick.minGap < 1) warns.push({lv:'warn', t:`內徑最小間隙 ${fmt(pick.minGap)}cm，建議實測`});
+      if(pick.cost !== null && pick.cost > pick.quote) warns.push({lv:'red', t:`成本 ${fmt(pick.cost)} 高於報價 ${pick.quote}`});
+      if(pick.cost === null) warns.push({lv:'warn', t:'成本未知' + (pick.basis === '級距推估' ? '，報價依級距推估' : '')});
+      if(pick.e.src === '紙箱龍') warns.push({lv:'warn', t:'訂做單價隨數量變動，數量不同請重新試算'});
+    }
+    // 空間利用率：商品（含裸裝外加）總體積 ÷ 紙箱內徑體積
+    let util = null;
+    if(pick && !pick.special && pick.e.kind === 'carton'){ const iv = innerOf(pick.e).reduce((a, b) => a * b, 1); const one = dims.map(v => v + 2 * pd.per).reduce((a, b) => a * b, 1); util = iv ? Math.round(one * n / iv * 100) : null; }
+    let filler = false;
+    if(pick && !pick.special && pick.e.kind === 'carton' && opt.filler && Math.max(...pick.gaps) >= opt.fillGap) filler = true;
+    return {item, n, qty, boxes, pick, alts:cands.slice(1, 4), warns, filler, pad:pd, util};
+  }
+  function summarize(results){
+    const map = new Map();
+    const add = (e, count, quote) => { const k = e.kind + '|' + e.src + '|' + e.code + '|' + sizeOf(e);
+      const cur = map.get(k) || {e, count:0, quote, cost:hasCost(e) ? +e.cost : null}; cur.count += count; map.set(k, cur); };
+    results.forEach(r => { if(r.pick && r.boxes) add(r.pick.e, r.boxes, r.pick.quote); });
+    const fe = catalog.find(e => e.kind === 'filler' && e.on);
+    const fillCount = results.reduce((a, r) => a + (r.filler ? r.boxes : 0), 0);
+    if(fe && fillCount) add(fe, fillCount, quoteInfo(fe).q);
+    const rows = [...map.values()].map(x => {
+      const withBuf = Math.ceil(x.count * (1 + opt.buffer / 100));
+      const quoteSub = x.count * x.quote;
+      const costSub = x.cost === null ? null : withBuf * x.cost;
+      return {...x, withBuf, quoteSub, costSub, margin:costSub === null ? null : quoteSub - costSub};
+    });
+    const known = rows.filter(r => r.costSub !== null);
+    return {rows, quoteTotal:rows.reduce((a, r) => a + r.quoteSub, 0), costTotal:known.reduce((a, r) => a + r.costSub, 0),
+      marginKnown:known.reduce((a, r) => a + r.margin, 0), unknownCost:rows.length - known.length};
+  }
+  function parseText(text){
+    const re = /(\d+(?:\.\d+)?)\s*[*xX×＊]\s*(\d+(?:\.\d+)?)\s*[*xX×＊]\s*(\d+(?:\.\d+)?)\s*(cm|CM|公分|mm|MM|公釐)?\s*[,，、:：]?\s*(\d+)\s*(?:個|件|台|箱|組|pcs|PCS|入)?/g;
+    const out = []; let lastName = '';
+    for(const raw of text.split(/\r?\n/)){
+      const line = raw.trim(); if(!line) continue;
+      re.lastIndex = 0; const ms = [...line.matchAll(re)];
+      if(!ms.length){ lastName = line.replace(/^\s*\d+\s*[.、．)]\s*/, '').replace(/^@\S+\s*/, '').trim(); continue; }
+      const before = line.slice(0, ms[0].index).replace(/^\s*\d+\s*[.、．)]\s*/, '').trim();
+      if(before) lastName = before;
+      for(const m of ms) out.push({name:lastName || '商品', L:+m[1], W:+m[2], H:+m[3], unit:/mm|公釐/i.test(m[4] || '') ? 'mm' : 'cm', qty:+m[5], per:1, bare:false});
+    }
+    return out;
+  }
+  // 組合出貨：先從商品數量扣掉組成的組數，剩下的才單件出貨
+  function buildJobs(){
+    const rem = items.map(it => Math.max(0, Math.floor(+it.qty || 0)));
+    const jobs = [];
+    bundles.forEach(b => {
+      const a = items[b.a], c = items[b.b];
+      if(!a || !c || !(b.qa > 0) || !(b.qb > 0)) return;
+      const sets = Math.max(0, Math.min(Math.floor(rem[b.a] / b.qa), Math.floor(rem[b.b] / b.qb)));
+      if(!sets) return;
+      rem[b.a] -= sets * b.qa; rem[b.b] -= sets * b.qb;
+      let L = +b.L, W = +b.W, H = +b.H;
+      if(!(L > 0 && W > 0 && H > 0)){ const da = sortDesc(toCm(a)), dc = sortDesc(toCm(c)); L = Math.max(da[0], dc[0]); W = Math.max(da[1], dc[1]); H = da[2] * b.qa + dc[2] * b.qb; }
+      jobs.push({bundle:true, name:'組合：' + (b.name || `${a.name}＋${c.name}`), L, W, H, unit:'cm', qty:sets, per:1, bare:!!b.bare, auto:!(+b.L > 0 && +b.W > 0 && +b.H > 0)});
+    });
+    items.forEach((it, i) => { if(+it.L > 0 && +it.W > 0 && +it.H > 0 && rem[i] > 0) jobs.push({...it, qty:rem[i]}); });
+    return jobs;
+  }
+
+  // ---------- 畫面 ----------
+  const num = (attrs, v, w = 64) => `<input type="number" ${attrs} value="${esc(v ?? '')}" style="width:${w}px">`;
+  function html(){
+    return `
+    <div class="alert info">大專案事先評估：貼上商品尺寸與數量，依紙箱內徑選箱，分開算「給客人的報價」與「我方成本」。這頁資料存在這台瀏覽器，不分客戶；換電腦請用最下方的備份。</div>
+    <div class="card"><h3>1. 貼上需求文字 <button class="btn small" onclick="PJ.parse()">解析加入</button></h3>
+      <textarea id="pj-paste" style="width:100%;min-height:90px;border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit" placeholder="例：&#10;1.身體烘乾機產品外包裝&#10;30*31*13 cm 594個&#10;喇叭 120*80*60 mm 640個"></textarea>
+      <div class="muted small">支援 30*31*13、30x31x13、30×31×13，可帶 cm／mm，數量後可帶 個/件/台/箱/pcs。尺寸前沒有品名時沿用上一行的品名。</div></div>
+    <div class="card"><h3>2. 商品清單 <button class="btn ghost small" onclick="PJ.addItem()">＋ 新增一列</button><button class="btn ghost small" onclick="PJ.clearItems()">清空</button></h3>
+      <div class="table-wrap"><table id="pj-items"></table></div>
+      <div class="muted small" style="margin-top:6px">「裸裝」＝商品沒有外包裝，會依最長邊加上下方「裸裝外加空間」的每邊預留。</div></div>
+    <div class="card"><h3>3. 組合出貨 <span class="sub">兩種商品裝同一箱，先扣掉組數，剩下的才單件出貨</span> <button class="btn ghost small" onclick="PJ.addBundle()">＋ 新增組合</button></h3>
+      <div class="table-wrap"><table id="pj-bundles"></table></div></div>
+    <div class="card"><h3>4. 設定</h3>
+      <div class="row small" style="gap:10px 20px">
+        <label>選箱優先 <select data-o="priority"><option value="quote" ${opt.priority === 'quote' ? 'selected' : ''}>客人報價最低</option><option value="cost" ${opt.priority === 'cost' ? 'selected' : ''}>我方成本最低</option></select></label>
+        <label><input type="checkbox" data-o="web" ${opt.web ? 'checked' : ''}> 納入紙箱小將現貨／紙箱龍訂做</label>
+        <label>報價＝成本＋${num('data-o="markup" step="0.5" min="0"', opt.markup, 56)}元，<select data-o="roundTo"><option value="1" ${opt.roundTo == 1 ? 'selected' : ''}>進位到整數</option><option value="5" ${opt.roundTo == 5 ? 'selected' : ''}>進位到 5 的倍數</option></select></label>
+        <label>每邊預留 ${num('data-o="clear" step="0.5" min="0"', opt.clear, 56)} cm</label>
+        <label>備品 ${num('data-o="buffer" step="1" min="0"', opt.buffer, 56)} %</label>
+        <label><input type="checkbox" data-o="filler" ${opt.filler ? 'checked' : ''}> 內徑空隙 ≥ ${num('data-o="fillGap" step="0.5" min="0"', opt.fillGap, 56)} cm 加剪裁式氣泡袋</label>
+        <label><input type="checkbox" data-o="bags" ${opt.bags ? 'checked' : ''}> 也考慮袋類</label>
+      </div>
+      <div class="muted small" style="margin-top:6px">紙箱尺寸一律當作<b>外徑</b>，內徑＝外徑 − 2 × 楞厚（E 0.15／B 0.3／A 0.5／AB 0.8 cm）。內徑有一邊間隙小於 1 cm 會標「建議實測」。</div>
+      <div class="row" style="align-items:flex-start;gap:16px;margin-top:12px">
+        <div><div class="small"><b>裸裝外加空間</b>（依商品最長邊）</div><div class="table-wrap"><table id="pj-pad" style="width:auto"></table></div><button class="btn ghost small" style="margin-top:6px" onclick="PJ.addPad()">＋ 級距</button></div>
+        <div><div class="small"><b>備用報價級距</b>（沒有定價也沒有成本的紙箱，依外徑長＋寬＋高）</div><div class="table-wrap"><table id="pj-tiers" style="width:auto"></table></div></div>
+      </div></div>
+    <div class="card"><h3>5. 每個品項的選箱結果</h3><div class="table-wrap"><table id="pj-res" class="orders"></table></div></div>
+    <div class="card"><h3>6. 要準備的包材總表 <button class="btn ghost small" onclick="PJ.exportXlsx()">⬇ 下載 Excel</button></h3>
+      <div class="table-wrap"><table id="pj-sum"></table></div>
+      <div class="row" style="align-items:flex-start;margin-top:10px">
+        <div style="flex:1;min-width:260px"><div class="row"><b class="small">給客人（只有報價）</b><button class="btn small" onclick="PJ.copy('pj-qt')">複製</button></div><pre id="pj-qt" class="small" style="white-space:pre-wrap;background:var(--surface2);border-radius:6px;padding:8px;margin-top:6px"></pre></div>
+        <div style="flex:1;min-width:260px"><div class="row"><b class="small">內部用（含成本、採購來源）</b><button class="btn ghost small" onclick="PJ.copy('pj-ct')">複製</button></div><pre id="pj-ct" class="small" style="white-space:pre-wrap;background:var(--surface2);border-radius:6px;padding:8px;margin-top:6px"></pre></div>
+      </div></div>
+    <div class="card"><details><summary style="cursor:pointer;font-weight:600">紙箱／耗材清單（可修改，記在這台瀏覽器）</summary>
+      <div class="row" style="margin:10px 0"><button class="btn ghost small" onclick="PJ.addCarton()">＋ 紙箱</button><button class="btn ghost small" onclick="PJ.addBag()">＋ 袋類</button><button class="btn ghost small" onclick="PJ.resetCat()">恢復預設清單</button></div>
+      <div class="table-wrap"><table id="pj-cat"></table></div>
+      <div class="muted small" style="margin-top:6px">報價有填＝固定定價；留空＝自動用「成本＋加價」湊整數（灰字）。俬儲的成本是用「報價 − 3」反推，有實際進價請直接改。成本留空＝未知，不列入毛利。內徑有填就用實際內徑，空白才用外徑扣楞厚推算。紙箱小將價格是 2026/11 官網含稅包裝價換算；紙箱龍單價隨數量變，數量不同請到官網重新試算。</div>
+    </details></div>
+    <div class="card"><h3>💾 備份 <span class="sub">換電腦或清除瀏覽器資料前先下載</span></h3>
+      <div class="row"><button class="btn ghost small" onclick="PJ.backup()">⬇ 下載備份檔</button>
+        <label class="btn ghost small" style="position:relative;overflow:hidden">⬆ 匯入備份檔<input type="file" accept=".json" style="position:absolute;inset:0;opacity:0;cursor:pointer" onchange="PJ.restore(this.files[0]);this.value=''"></label></div></div>`;
+  }
+
+  function renderItems(){
+    const t = $('pj-items'); if(!t) return;
+    t.innerHTML = `<thead><tr><th>品名</th><th>長</th><th>寬</th><th>高</th><th>單位</th><th>數量</th><th title="一箱裝幾個商品">每箱裝</th><th>裸裝</th><th></th></tr></thead><tbody>` +
+      (items.length ? items.map((it, i) => `<tr>
+        <td><input type="text" data-i="${i}" data-f="name" value="${esc(it.name)}" style="min-width:140px"></td>
+        ${['L', 'W', 'H'].map(f => `<td>${num(`data-i="${i}" data-f="${f}" min="0" step="0.5"`, it[f])}</td>`).join('')}
+        <td><select data-i="${i}" data-f="unit"><option value="cm" ${it.unit !== 'mm' ? 'selected' : ''}>cm</option><option value="mm" ${it.unit === 'mm' ? 'selected' : ''}>mm</option></select></td>
+        <td>${num(`data-i="${i}" data-f="qty" min="0" step="1"`, it.qty, 72)}</td>
+        <td>${num(`data-i="${i}" data-f="per" min="1" step="1"`, it.per || 1, 56)}</td>
+        <td style="text-align:center"><input type="checkbox" data-i="${i}" data-f="bare" ${it.bare ? 'checked' : ''}></td>
+        <td><button class="btn ghost small" onclick="PJ.delItem(${i})">刪除</button></td></tr>`).join('')
+      : '<tr><td colspan="9" class="muted">還沒有商品，先在上方貼文字或按「新增一列」。</td></tr>') + '</tbody>';
+  }
+  function renderBundles(){
+    const t = $('pj-bundles'); if(!t) return;
+    const opts = sel => items.map((it, i) => `<option value="${i}" ${i === +sel ? 'selected' : ''}>${esc(it.name || '商品' + (i + 1))}</option>`).join('');
+    t.innerHTML = `<thead><tr><th>組合名稱</th><th>商品 A</th><th>A 數量</th><th>商品 B</th><th>B 數量</th><th title="組合後的尺寸，空白＝自動估算">長／寬／高 (cm)</th><th>裸裝</th><th></th></tr></thead><tbody>` +
+      (bundles.length ? bundles.map((b, i) => `<tr>
+        <td><input type="text" data-b="${i}" data-f="name" value="${esc(b.name)}" style="min-width:120px"></td>
+        <td><select data-b="${i}" data-f="a">${opts(b.a)}</select></td><td>${num(`data-b="${i}" data-f="qa" min="1" step="1"`, b.qa, 56)}</td>
+        <td><select data-b="${i}" data-f="b">${opts(b.b)}</select></td><td>${num(`data-b="${i}" data-f="qb" min="1" step="1"`, b.qb, 56)}</td>
+        <td style="white-space:nowrap">${['L', 'W', 'H'].map(f => `<input type="number" data-b="${i}" data-f="${f}" min="0" step="0.5" value="${esc(+b[f] > 0 ? b[f] : '')}" placeholder="自動" style="width:58px">`).join(' ')}</td>
+        <td style="text-align:center"><input type="checkbox" data-b="${i}" data-f="bare" ${b.bare ? 'checked' : ''}></td>
+        <td><button class="btn ghost small" onclick="PJ.delBundle(${i})">刪除</button></td></tr>`).join('')
+      : `<tr><td colspan="8" class="muted">${items.length >= 2 ? '沒有組合出貨。' : '商品清單至少要有兩項才能設定組合。'}</td></tr>`) + '</tbody>';
+  }
+  function renderPad(){
+    const t = $('pj-pad'); if(!t) return;
+    t.innerHTML = `<thead><tr><th>級距</th><th>最長邊 ≤ (cm)</th><th>每邊加 (cm)</th><th></th></tr></thead><tbody>` + pad.map((r, i) => `<tr>
+      <td><input type="text" data-p="${i}" data-f="label" value="${esc(r.label)}" style="width:110px"></td>
+      <td><input type="number" data-p="${i}" data-f="maxDim" min="0" value="${esc(r.maxDim ?? '')}" placeholder="以上" style="width:70px"></td>
+      <td>${num(`data-p="${i}" data-f="perSide" min="0" step="0.5"`, r.perSide, 56)}</td>
+      <td><button class="btn ghost small" onclick="PJ.delPad(${i})">刪除</button></td></tr>`).join('') + '</tbody>';
+  }
+  function renderTiers(){
+    const t = $('pj-tiers'); if(!t) return;
+    t.innerHTML = `<thead><tr><th>級距</th><th>長寬高合計 ≤</th><th>報價</th></tr></thead><tbody>` + tiers.map((x, i) => `<tr><td>${esc(x.name)}</td>
+      <td>${x.max === null ? '以上' : num(`data-t="${i}" data-f="max"`, x.max, 64)}</td><td>${num(`data-t="${i}" data-f="price"`, x.price, 56)}</td></tr>`).join('') + '</tbody>';
+  }
+  function renderCatalog(){
+    const t = $('pj-cat'); if(!t) return;
+    const kindName = {carton:'紙箱', bag:'袋', special:'特規箱', filler:'緩衝材'};
+    t.innerHTML = `<thead><tr><th>啟用</th><th>來源</th><th>類別</th><th>名稱</th><th>長</th><th>寬</th><th>高</th><th>楞別</th><th title="空白＝外徑扣楞厚自動算">內徑（長/寬/高）</th><th>報價</th><th>成本</th><th>備註</th><th></th></tr></thead><tbody>` +
+      catalog.map((e, i) => {
+        const dim = f => { const show = e.kind === 'carton' || (e.kind === 'bag' && f !== 'H'); return `<td>${show ? num(`data-c="${i}" data-f="${f}" min="0" step="0.5"`, e[f], 56) : ''}</td>`; };
+        const flute = e.kind === 'carton' ? `<select data-c="${i}" data-f="flute">${Object.keys(FLUTE_T).map(k => `<option ${e.flute === k ? 'selected' : ''}>${k}</option>`).join('')}</select>` : '';
+        const inner = e.kind === 'carton' ? ['iL', 'iW', 'iH'].map((f, k) => `<input type="number" min="0" step="0.1" data-c="${i}" data-f="${f}" value="${esc(e[f] ?? '')}" placeholder="${fmt(innerOf({...e, iL:null})[k])}" style="width:56px">`).join('') : '';
+        const qi = quoteInfo(e);
+        return `<tr><td><input type="checkbox" data-c="${i}" data-f="on" ${e.on ? 'checked' : ''}></td>
+          <td><span class="chip">${esc(e.src)}</span></td><td class="small">${kindName[e.kind]}${e.kind === 'carton' ? '' : '・' + esc(e.grp)}</td>
+          <td><input type="text" data-c="${i}" data-f="code" value="${esc(e.code)}" style="min-width:120px"></td>
+          ${dim('L')}${dim('W')}${dim('H')}<td>${flute}</td><td style="white-space:nowrap">${inner}</td>
+          <td><input type="number" min="0" step="1" data-c="${i}" data-f="price" value="${esc(e.price ?? '')}" placeholder="${qi.q}" style="width:56px"><div class="muted small">${esc(qi.basis)}</div></td>
+          <td><input type="number" min="0" step="0.1" data-c="${i}" data-f="cost" value="${esc(e.cost ?? '')}" placeholder="未知" style="width:60px"></td>
+          <td><input type="text" data-c="${i}" data-f="note" value="${esc(e.note)}" style="min-width:160px"></td>
+          <td><button class="btn ghost small" onclick="PJ.delCat(${i})">刪除</button></td></tr>`; }).join('') + '</tbody>';
+  }
+
+  function compute(){
+    const rt = $('pj-res'); if(!rt) return;
+    const jobs = buildJobs();
+    const res = jobs.map(evaluateItem);
+    rt.innerHTML = `<thead><tr><th>品名</th><th>尺寸 × 數量</th><th>建議紙箱</th><th>內徑間隙／利用率</th><th>報價</th><th>成本</th><th>箱數</th><th>提醒</th></tr></thead><tbody>` +
+      (res.length ? res.map(r => {
+        const it = r.item, p = r.pick, d = toCm(it);
+        const pickTxt = p ? `<b>${esc(p.e.code)}</b> <span class="chip">${esc(p.e.src)}</span><div class="muted small">外徑 ${esc(sizeOf(p.e))}${p.e.flute ? '・' + p.e.flute + '楞' : ''}</div>` : '—';
+        const altTxt = r.alts.length ? `<div class="muted small">其他可用：${r.alts.map(a => `${esc(a.e.code)}（報${a.quote}/本${a.cost ?? '?'}）`).join('、')}</div>` : '';
+        const tags = r.warns.map(w => `<span class="chip ${w.lv}">${esc(w.t)}</span>`);
+        if(r.filler) tags.push('<span class="chip ok">加緩衝材</span>');
+        if(it.bare) tags.push(`<span class="chip blue">裸裝每邊 +${fmt(r.pad.per)}cm（${esc(r.pad.label)}）</span>`);
+        if(it.auto) tags.push('<span class="chip">組合尺寸為自動估算</span>');
+        if(!r.warns.length) tags.unshift('<span class="chip ok">OK</span>');
+        return `<tr><td>${esc(it.name)}</td>
+          <td class="small">${d.map(fmt).join('×')} cm × ${r.qty}${it.unit === 'mm' ? '<div class="muted">（原單位 mm）</div>' : ''}${r.n > 1 ? `<div class="muted">每箱 ${r.n} 個</div>` : ''}</td>
+          <td>${pickTxt}${altTxt}</td><td class="small">${p && p.gaps ? p.gaps.map(fmt).join(' / ') : '—'}${r.util !== null ? `<div class="muted">利用率 ${r.util}%</div>` : ''}</td>
+          <td class="mono">${p ? p.quote : '—'}</td><td class="mono">${p && p.cost !== null ? fmt(p.cost) : '?'}</td>
+          <td class="mono"><b>${r.boxes}</b></td><td>${tags.join('')}</td></tr>`; }).join('')
+      : '<tr><td colspan="8" class="muted">填好長寬高與數量後會自動計算。</td></tr>') + '</tbody>';
+
+    const s = summarize(res);
+    last = {res, s};
+    const st = $('pj-sum');
+    st.innerHTML = `<thead><tr><th>包材</th><th>外徑規格</th><th>來源</th><th>需求數</th><th>含備品</th><th>報價</th><th>報價小計</th><th>成本</th><th>成本小計</th><th>毛利</th></tr></thead><tbody>` +
+      (s.rows.length ? s.rows.map(x => `<tr><td>${esc(x.e.code)}</td><td class="small">${esc(sizeOf(x.e))}</td><td><span class="chip">${esc(x.e.src)}</span></td>
+        <td class="mono">${x.count.toLocaleString()}</td><td class="mono">${x.withBuf.toLocaleString()}</td><td class="mono">${x.quote}</td><td class="mono">${money(x.quoteSub)}</td>
+        <td class="mono">${x.cost === null ? '?' : fmt(x.cost)}</td><td class="mono">${x.costSub === null ? '?' : money(x.costSub)}</td>
+        <td class="mono" style="${x.margin !== null && x.margin < 0 ? 'color:var(--danger)' : ''}">${x.margin === null ? '?' : money(x.margin)}</td></tr>`).join('')
+        + `<tr><td colspan="6"><b>合計</b></td><td class="mono"><b>${money(s.quoteTotal)}</b></td><td></td><td class="mono"><b>${money(s.costTotal)}</b></td><td class="mono"><b>${money(s.marginKnown)}</b></td></tr>
+           <tr><td colspan="10" class="muted small">報價小計＝實際使用數 × 報價（向客人收）；成本小計＝含 ${opt.buffer}% 備品的採購數 × 成本（不含運費）。${s.unknownCost ? `有 ${s.unknownCost} 項成本未知，未列入成本與毛利。` : ''}</td></tr>`
+      : '<tr><td colspan="10" class="muted">—</td></tr>') + '</tbody>';
+    if(!s.rows.length){ $('pj-qt').textContent = ''; $('pj-ct').textContent = ''; return; }
+    const q = ['【包材費用預估】'];
+    res.forEach(r => { const d = toCm(r.item); q.push(`・${r.item.name} ${d.map(fmt).join('*')} ×${r.qty}：${r.boxes}箱 × ${r.pick ? r.pick.quote : '?'}元 = ${r.pick ? money(r.boxes * r.pick.quote) : '?'}元`); });
+    const fr = s.rows.find(x => x.e.kind === 'filler'); if(fr) q.push(`・緩衝材 ${fr.count}份 × ${fr.quote}元 = ${money(fr.quoteSub)}元`);
+    q.push(`合計約 ${money(s.quoteTotal)} 元（耗材論件計，月底結算後於次月請款單列出）`);
+    $('pj-qt').textContent = q.join('\n');
+    const c = ['【內部】採購與毛利（含' + opt.buffer + '%備品，未含運費）'];
+    s.rows.forEach(x => c.push(`・${x.e.code}（${x.e.src}）採購 ${x.withBuf} × ${x.cost === null ? '?' : fmt(x.cost)} = ${x.costSub === null ? '?' : money(x.costSub)}｜收 ${money(x.quoteSub)}｜毛利 ${x.margin === null ? '?' : money(x.margin)}${x.e.note ? '｜' + x.e.note : ''}`));
+    c.push(`成本合計 ${money(s.costTotal)}｜報價合計 ${money(s.quoteTotal)}｜已知毛利 ${money(s.marginKnown)}${s.unknownCost ? `（${s.unknownCost}項成本未知）` : ''}`);
+    res.forEach(r => r.warns.forEach(w => c.push(`⚠ ${r.item.name}：${w.t}`)));
+    $('pj-ct').textContent = c.join('\n');
+  }
+
+  // ---------- 事件 ----------
+  function onInput(e){
+    const t = e.target, d = t.dataset, f = d.f, val = () => t.type === 'checkbox' ? t.checked : t.value;
+    if(d.o !== undefined){ const k = d.o; opt[k] = t.type === 'checkbox' ? t.checked : (k === 'priority' ? t.value : (+t.value || 0)); saveAll(); renderCatalog(); compute(); return; }
+    if(d.i !== undefined){ const it = items[+d.i]; if(!it) return;
+      it[f] = (f === 'name' || f === 'unit') ? t.value : f === 'bare' ? t.checked : (t.value === '' ? '' : +t.value);
+      saveAll(); if(f === 'name') renderBundles(); compute(); return; }
+    if(d.b !== undefined){ const b = bundles[+d.b]; if(!b) return;
+      b[f] = f === 'name' ? t.value : f === 'bare' ? t.checked : (t.value === '' ? '' : +t.value); saveAll(); compute(); return; }
+    if(d.p !== undefined){ const r = pad[+d.p]; if(!r) return;
+      r[f] = f === 'label' ? t.value : f === 'maxDim' ? (t.value === '' ? null : +t.value) : (+t.value || 0); saveAll(); compute(); return; }
+    if(d.t !== undefined){ tiers[+d.t][f] = +t.value; saveAll(); renderCatalog(); compute(); return; }
+    if(d.c !== undefined){ const c = catalog[+d.c]; if(!c) return;
+      if(f === 'on') c.on = t.checked; else if(f === 'code' || f === 'note' || f === 'flute') c[f] = t.value;
+      else if(['cost', 'price', 'iL', 'iW', 'iH'].includes(f)) c[f] = t.value === '' ? null : +t.value; else c[f] = +t.value;
+      saveAll(); if(e.type === 'change') renderCatalog(); compute(); }
+  }
+  function mount(){
+    const m = $('app-main'); if(!m) return;
+    m.oninput = onInput;
+    m.onchange = e => { if(e.target.type === 'checkbox' || e.target.tagName === 'SELECT' || e.target.dataset.c !== undefined) onInput(e); };
+    if(!items.length && !$('pj-paste').value) $('pj-paste').value = '1.身體烘乾機產品外包裝\n30*31*13 cm 594個\n2. 空氣清淨機產品外包裝\n34*25*21 cm 97個\n41*31*28 cm 35個';
+    renderItems(); renderBundles(); renderPad(); renderTiers(); renderCatalog(); compute();
+  }
+
+  function exportXlsx(){
+    if(!last || !last.res.length){ toast('還沒有計算結果'); return; }
+    const {res, s} = last;
+    const a1 = [['品名', '尺寸(cm)', '數量', '每箱裝', '裸裝外加(每邊cm)', '建議包材', '來源', '利用率', '報價', '成本', '箱數', '提醒']];
+    res.forEach(r => a1.push([r.item.name, toCm(r.item).map(fmt).join('x'), r.qty, r.n, r.item.bare ? r.pad.per : '', r.pick ? r.pick.e.code : '', r.pick ? r.pick.e.src : '',
+      r.util !== null ? r.util + '%' : '', r.pick ? r.pick.quote : '', r.pick && r.pick.cost !== null ? r.pick.cost : '', r.boxes, r.warns.map(w => w.t).join('、')]));
+    const a2 = [['包材', '外徑規格', '來源', '需求數', '含備品', '報價', '報價小計', '成本', '成本小計', '毛利']];
+    s.rows.forEach(x => a2.push([x.e.code, sizeOf(x.e), x.e.src, x.count, x.withBuf, x.quote, x.quoteSub, x.cost ?? '', x.costSub ?? '', x.margin ?? '']));
+    a2.push(['合計', '', '', '', '', '', s.quoteTotal, '', s.costTotal, s.marginKnown]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a1), '選箱結果');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a2), '包材總表');
+    XLSX.writeFile(wb, '專案包材試算_' + getTodayTW() + '.xlsx');
+  }
+  function backup(){
+    const blob = new Blob([JSON.stringify({type:'pkg-project-backup', version:PKG_VERSION, at:getTodayTW(), catalog, tiers, pad, items, bundles, opt}, null, 1)], {type:'application/json'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '專案試算備份_' + getTodayTW() + '.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  // 匯入：紙箱清單依「來源＋名稱」合併，同名但內容不同的會列出來讓使用者決定是否覆蓋
+  function restore(file){
+    if(!file) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      let d; try{ d = JSON.parse(rd.result); }catch(e){ toast('不是有效的備份檔'); return; }
+      if(d.type !== 'pkg-project-backup'){ toast('不是專案試算的備份檔'); return; }
+      const key = e => e.src + '|' + e.code;
+      const cur = new Map(catalog.map(e => [key(e), e]));
+      const conflicts = [], adds = [];
+      (d.catalog || []).forEach(e => { const c = cur.get(key(e)); if(!c) adds.push(e); else if(JSON.stringify(c) !== JSON.stringify(e)) conflicts.push(e); });
+      let overwrite = false;
+      if(conflicts.length) overwrite = confirm(`備份檔有 ${conflicts.length} 個紙箱和這台電腦的設定不同：\n${conflicts.slice(0, 10).map(e => '・' + e.src + ' ' + e.code).join('\n')}${conflicts.length > 10 ? '\n…' : ''}\n\n按「確定」用備份檔覆蓋，按「取消」保留這台電腦的設定。`);
+      catalog.push(...adds);
+      if(overwrite) conflicts.forEach(e => { const i = catalog.findIndex(x => key(x) === key(e)); if(i >= 0) catalog[i] = e; });
+      const exist = new Set(items.map(it => JSON.stringify([it.name, it.L, it.W, it.H, it.qty])));
+      const newItems = (d.items || []).filter(it => !exist.has(JSON.stringify([it.name, it.L, it.W, it.H, it.qty])));
+      if(newItems.length && confirm(`備份檔有 ${newItems.length} 個這台電腦沒有的商品，要加進商品清單嗎？`)) items.push(...newItems);
+      saveAll(); render();
+      toast(`匯入完成：新增 ${adds.length} 個紙箱${conflicts.length ? `，${overwrite ? '覆蓋' : '保留'} ${conflicts.length} 個不同的設定` : ''}`, 4000);
+    };
+    rd.readAsText(file);
+  }
+
+  return {
+    html, mount, exportXlsx, backup, restore,
+    parse(){ const got = parseText($('pj-paste').value); if(!got.length){ toast('沒有抓到「長*寬*高 數量」'); return; } items.push(...got); saveAll(); renderItems(); renderBundles(); compute(); toast(`加入 ${got.length} 筆`); },
+    addItem(){ items.push({name:'', L:'', W:'', H:'', unit:'cm', qty:'', per:1, bare:false}); saveAll(); renderItems(); renderBundles(); },
+    delItem(i){ items.splice(i, 1); bundles = bundles.filter(b => b.a !== i && b.b !== i).map(b => ({...b, a:b.a > i ? b.a - 1 : b.a, b:b.b > i ? b.b - 1 : b.b})); saveAll(); renderItems(); renderBundles(); compute(); },
+    clearItems(){ if(!confirm('清空商品清單和組合出貨？')) return; items = []; bundles = []; saveAll(); renderItems(); renderBundles(); compute(); },
+    addBundle(){ if(items.length < 2){ toast('商品清單至少要有兩項'); return; } bundles.push({name:'', a:0, qa:1, b:1, qb:1, L:'', W:'', H:'', bare:false}); saveAll(); renderBundles(); compute(); },
+    delBundle(i){ bundles.splice(i, 1); saveAll(); renderBundles(); compute(); },
+    addPad(){ pad.push({label:'新級距', maxDim:null, perSide:5}); saveAll(); renderPad(); compute(); },
+    delPad(i){ pad.splice(i, 1); saveAll(); renderPad(); compute(); },
+    addCarton(){ catalog.push({kind:'carton', src:'自訂', grp:'紙箱', code:'新紙箱', L:0, W:0, H:0, flute:'B', cost:null, note:'', on:true}); saveAll(); renderCatalog(); },
+    addBag(){ catalog.push({kind:'bag', src:'俬儲', grp:'自訂', code:'新袋', L:0, W:0, price:0, cost:null, note:'', on:true}); saveAll(); renderCatalog(); },
+    delCat(i){ catalog.splice(i, 1); saveAll(); renderCatalog(); compute(); },
+    resetCat(){ if(!confirm('紙箱清單、報價級距、裸裝外加空間都恢復預設？')) return; catalog = clone(DEFAULT_CATALOG).map(e => ({...e, on:true})); tiers = clone(DEFAULT_TIERS); pad = clone(DEFAULT_PAD); saveAll(); renderTiers(); renderPad(); renderCatalog(); compute(); toast('已恢復預設清單'); },
+    async copy(id){ const t = $(id).textContent; if(!t) return; try{ await navigator.clipboard.writeText(t); toast('已複製'); }catch(e){ prompt('複製以下內容：', t); } },
+    _test:{parseText, evaluateItem, buildJobs, padFor, set(o){ if(o.items) items = o.items; if(o.bundles) bundles = o.bundles; if(o.opt) opt = {...opt, ...o.opt}; }, get last(){ return last; }},
+  };
+})();
 
 /* ================= 拖放上傳 ================= */
 document.addEventListener('dragover', e => { const dz = $('dz'); if(dz){ e.preventDefault(); dz.classList.add('drag'); } });
