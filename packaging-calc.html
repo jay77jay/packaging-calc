@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>包材計算工具</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#F5F2EC; --surface:#FFFFFF; --surface2:#EDE9E0; --border:#D4CFC4;
+    --text:#1A1814; --text2:#6B6860; --muted:#9B9890;
+    --accent:#2D5A3D; --accent-light:#E8F0EB;
+    --warn:#B26A00; --warn-bg:#FFF4E0; --danger:#C62828; --danger-bg:#FDECEA; --info-bg:#E8F1FB; --info:#1565C0;
+    --radius:8px; --radius-lg:12px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
+  .mono{font-family:'Space Mono',monospace}
+  .header{background:var(--accent);color:#fff;padding:14px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .header h1{font-size:18px;font-weight:700;letter-spacing:.05em}
+  .header .ver{font-size:11px;opacity:.65;font-family:'Space Mono',monospace}
+  .header .sp{flex:1}
+  .header .who{font-size:12px;opacity:.85}
+  .header button{background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:6px;padding:4px 10px;cursor:pointer;font:inherit;font-size:12px}
+  .pickbar{background:var(--surface);border-bottom:1px solid var(--border);padding:10px 20px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .pickbar label{font-size:12px;color:var(--text2)}
+  select,input[type=text]{font:inherit;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);max-width:100%}
+  .nav-tabs{display:flex;background:var(--surface2);border-bottom:1px solid var(--border);padding:0 12px;overflow-x:auto}
+  .nav-tab{padding:11px 18px;font-weight:500;cursor:pointer;border-bottom:3px solid transparent;color:var(--text2);white-space:nowrap}
+  .nav-tab.active{color:var(--accent);border-bottom-color:var(--accent);background:var(--surface)}
+  .main{max-width:1100px;margin:0 auto;padding:20px 16px 60px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;margin-bottom:16px}
+  .card h3{font-size:15px;margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .card h3 .sub{font-size:12px;color:var(--muted);font-weight:400}
+  .btn{font:inherit;border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:6px;padding:7px 14px;cursor:pointer;font-weight:500}
+  .btn.ghost{background:#fff;color:var(--accent)}
+  .btn.small{padding:4px 10px;font-size:12px}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .muted{color:var(--muted)} .small{font-size:12px}
+  .upload-zone{border:2px dashed var(--border);border-radius:var(--radius-lg);background:var(--surface);padding:36px 20px;text-align:center;cursor:pointer;position:relative}
+  .upload-zone:hover,.upload-zone.drag{border-color:var(--accent);background:var(--accent-light)}
+  .upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+  .upload-zone .ic{font-size:40px;margin-bottom:8px}
+  .alert{border-radius:var(--radius);padding:10px 12px;margin-bottom:12px;font-size:13px;line-height:1.6}
+  .alert.warn{background:var(--warn-bg);color:var(--warn);border:1px solid #F0D3A0}
+  .alert.danger{background:var(--danger-bg);color:var(--danger);border:1px solid #F3B9B3}
+  .alert.info{background:var(--info-bg);color:var(--info);border:1px solid #BCD4F0}
+  .alert.ok{background:var(--accent-light);color:var(--accent);border:1px solid #BFD6C6}
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{background:var(--surface2);text-align:left;padding:7px 8px;font-weight:600;color:var(--text2);white-space:nowrap;border-bottom:1px solid var(--border)}
+  td{padding:7px 8px;border-bottom:1px solid #EEEAE2;vertical-align:top}
+  tr.flag-red td{background:#FFF6F5}
+  tr.flag-edit td{background:#F4F8FF}
+  .chip{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;background:var(--surface2);color:var(--text2);margin:1px 2px 1px 0;white-space:nowrap}
+  .chip.ok{background:var(--accent-light);color:var(--accent)}
+  .chip.red{background:var(--danger-bg);color:var(--danger)}
+  .chip.warn{background:var(--warn-bg);color:var(--warn)}
+  .chip.blue{background:var(--info-bg);color:var(--info)}
+  .sum-grid{display:grid;grid-template-columns:1fr auto;gap:0;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  .sum-grid div{padding:9px 12px;border-bottom:1px solid #EEEAE2}
+  .sum-grid .n{font-family:'Space Mono',monospace;font-weight:700;font-size:18px;text-align:right;color:var(--accent)}
+  .sum-grid .zero{color:var(--muted);font-weight:400;font-size:14px}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:14px}
+  .stat{background:var(--surface2);border-radius:var(--radius);padding:10px 12px}
+  .stat .l{font-size:11px;color:var(--text2)} .stat .v{font-family:'Space Mono',monospace;font-size:20px;font-weight:700}
+  .stat.red .v{color:var(--danger)} .stat.warn .v{color:var(--warn)} .stat.blue .v{color:var(--info)}
+  .items{font-size:12px;color:var(--text2);line-height:1.5;min-width:220px}
+  table.orders{min-width:760px}
+  table.orders td:nth-child(2){min-width:120px}
+  .diff-add{color:var(--accent)} .diff-del{color:var(--danger);text-decoration:line-through}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1A1814;color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;z-index:99;max-width:90vw;display:none}
+  .center{text-align:center;padding:60px 16px}
+  @media (max-width:600px){ .header{padding:12px 16px} .pickbar{padding:10px 16px} .main{padding:16px 12px 60px} th,td{padding:6px 6px} }
+</style>
+</head>
+<body>
+<div class="header">
+  <div><h1>📦 包材計算工具</h1><div class="ver" id="ver"></div></div>
+  <div class="sp"></div>
+  <div class="who" id="who"></div>
+  <button id="btn-logout" style="display:none" onclick="doLogout()">登出</button>
+</div>
+<div id="app"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* =====================================================================
+   包材計算工具（通用版）
+   - 依倉庫／客戶讀 ERP（ezfun-warehouse-billing）的耗材工序當包材選項
+   - 規則存在 Firestore pkg_calc_rules/{cid}，用 Excel 上傳／下載維護
+   - 出貨明細自動找有「單號＋數量」表頭的分頁，依物流方式分通路計算
+   - ?demo=1：假資料測試模式，不連資料庫
+   ===================================================================== */
+const PKG_VERSION = 'v2.0';
+const DEMO = new URLSearchParams(location.search).has('demo') || /demo/.test(location.hash);
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function getTodayTW(){ return new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Taipei'}).format(new Date()); }
+function fmtTime(ms){ if(!ms) return ''; const d = new Date(ms); return new Intl.DateTimeFormat('zh-TW', {timeZone:'Asia/Taipei', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false}).format(d); }
+let toastT = null;
+function toast(msg, ms = 2500){ const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => t.style.display = 'none', ms); }
+const splitKw = s => String(s ?? '').split(/[,，、\n]/).map(x => x.trim()).filter(Boolean);
+const isConsumable = p => p.category === '耗材' || (!p.category && /紙箱|箱|袋/.test(p.name || ''));
+
+/* ================= 預設規則（新客戶的範本，沿用暮雨 v1.0） ================= */
+const DEFAULT_RULES = () => ({
+  channels: [
+    {name:'宅配', keywords:['宅配','黑貓','新竹','郵局','宅急便'], maxPkg:''},
+    {name:'超取', keywords:['超商','超取','7-11','711','全家','萊爾富','OK'], maxPkg:''},
+  ],
+  rules: [
+    {ch:'', min:1, max:2, pkg:'破壞袋$4'},
+    {ch:'', min:3, max:5, pkg:'俬儲紙箱M'},
+    {ch:'', min:6, max:10, pkg:'俬儲紙箱L'},
+    {ch:'', min:11, max:20, pkg:'俬儲紙箱XL'},
+    {ch:'', min:21, max:9999, pkg:'俬儲紙箱XXL'},
+  ],
+  combos: [], points: [], identify: [],
+});
+
+/* ================= 資料層：Firestore 或測試假資料 ================= */
+const api = DEMO ? demoApi() : fireApi();
+
+function fireApi(){
+  firebase.initializeApp({
+    apiKey: "AIzaSyBmb_51Pq-QatHwKkcrNlKw0B6e8YmKAsw",
+    authDomain: "ezfun-warehouse-billing.firebaseapp.com",
+    projectId: "ezfun-warehouse-billing",
+    storageBucket: "ezfun-warehouse-billing.firebasestorage.app",
+    messagingSenderId: "175590672953",
+    appId: "1:175590672953:web:6304ddce7b45b191529be8"
+  });
+  const auth = firebase.auth(), db = firebase.firestore();
+  return {
+    onAuth(cb){ auth.onAuthStateChanged(cb); auth.getRedirectResult().catch(e => toast('登入失敗：' + (e.code || e.message), 5000)); },
+    async login(){
+      const p = new firebase.auth.GoogleAuthProvider();
+      try{ await auth.signInWithPopup(p); }
+      catch(e){
+        const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        if(e.code === 'auth/popup-blocked') throw new Error('彈出視窗被擋住了：iPhone 請到「設定 → Safari」關閉「阻擋彈出式視窗」，再按一次登入');
+        if(e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request') return;
+        if(!ios && e.code === 'auth/operation-not-supported-in-this-environment') return auth.signInWithRedirect(p);
+        throw new Error('登入失敗：' + (e.code || e.message));
+      }
+    },
+    logout(){ return auth.signOut(); },
+    async profile(user){
+      const [u, g] = await Promise.all([db.collection('hub_settings').doc('users').get(), db.collection('hub_settings').doc('global').get().catch(() => null)]);
+      const users = u.exists ? u.data() : {}, email = (user.email || '').toLowerCase();
+      const rec = users[email] || Object.entries(users).find(([k]) => k.toLowerCase() === email)?.[1];
+      const admins = ((g && g.exists && g.data().superAdmins) || []).map(x => String(x).toLowerCase());
+      return {ok: !!rec || admins.includes(email), admin: admins.includes(email), blocked: !!(rec && (rec.blockedSystems || []).includes('packaging')),
+        name: (rec && rec.name) || user.displayName || email, warehouses: ((rec && rec.warehouses) || []).map(String).filter(Boolean)};
+    },
+    async warehouses(){ const s = await db.collection('warehouses').get(); return s.docs.map(d => ({id:d.id, ...d.data()})); },
+    async customers(){ const s = await db.collection('customers').get(); return s.docs.map(d => ({id:d.id, ...d.data()})); },
+    async processes(cid){ const s = await db.collection('customers').doc(cid).collection('processes').get(); return s.docs.map(d => ({id:d.id, ...d.data()})); },
+    async getRules(cid){ const d = await db.collection('pkg_calc_rules').doc(cid).get(); return d.exists ? d.data() : null; },
+    async saveRules(cid, data){ const ref = db.collection('pkg_calc_rules').doc(cid); await ref.set(data); await ref.collection('history').add(data); },
+  };
+}
+
+function demoApi(){
+  const K = 'pkg_calc_demo_rules';
+  const load = () => { try{ return JSON.parse(localStorage.getItem(K) || '{}'); }catch(e){ return {}; } };
+  const procs = [
+    {id:'p1', name:'出貨處理費', price:15, category:'服務費', order:0},
+    {id:'p2', name:'破壞袋$4', price:4, category:'耗材', order:1},
+    {id:'p3', name:'俬儲紙箱M', price:12, category:'耗材', order:2},
+    {id:'p4', name:'俬儲紙箱L', price:15, category:'耗材', order:3},
+    {id:'p5', name:'俬儲紙箱XL', price:20, category:'耗材', order:4},
+    {id:'p6', name:'俬儲紙箱XXL', price:25, category:'耗材', order:5},
+  ];
+  return {
+    onAuth(cb){ setTimeout(() => cb({email:'demo@test', displayName:'測試員'}), 0); },
+    login(){}, logout(){ location.reload(); },
+    async profile(){ return {ok:true, admin:false, blocked:false, name:'測試員', warehouses:['汐止倉']}; },
+    async warehouses(){ return [{id:'w1', name:'汐止倉', order:0}, {id:'w2', name:'五股倉', order:1}]; },
+    async customers(){ return [{id:'c1', name:'暮雨', wh:'w1'}, {id:'c2', name:'心茶', wh:'w1'}]; },
+    async processes(cid){ return cid === 'c1' ? procs : procs.slice(0, 3); },
+    async getRules(cid){ return load()[cid] || null; },
+    async saveRules(cid, data){ const all = load(); all[cid] = data; try{ localStorage.setItem(K, JSON.stringify(all)); }catch(e){} },
+  };
+}
+
+/* ================= 狀態 ================= */
+const S = {
+  me:null, whs:[], custs:[], wh:'', cid:'', procs:[], rules:null, tab:'calc',
+  buf:null, filename:'', sheets:[], orders:[], overrides:{}, pendingRules:null, pendingErrors:[], pendingWarns:[],
+};
+const LS = {
+  get(k){ try{ return localStorage.getItem(k) || ''; }catch(e){ return ''; } },
+  set(k, v){ try{ localStorage.setItem(k, v); }catch(e){} },
+};
+
+/* ================= 登入與倉庫／客戶 ================= */
+api.onAuth(async (user) => {
+  if(!user){ S.me = null; renderLogin(); return; }
+  try{
+    const pf = await api.profile(user);
+    if(!pf.ok){ renderMsg(`你的帳號（${esc(user.email)}）不在 ERP 帳號清單中，請聯絡管理員到 Hub 新增。`, true); return; }
+    if(pf.blocked){ renderMsg('你的帳號沒有包材計算工具的使用權限。', true); return; }
+    S.me = {email:(user.email || '').toLowerCase(), ...pf};
+    $('who').textContent = S.me.name + (DEMO ? '（測試模式）' : '');
+    $('btn-logout').style.display = '';
+    const [whs, custs] = await Promise.all([api.warehouses(), api.customers()]);
+    // 管理員或沒設定倉庫的帳號看全部倉庫；其他人只看 hub_settings/users.warehouses 裡的倉庫
+    const allowAll = S.me.admin || !S.me.warehouses.length;
+    S.whs = whs.filter(w => allowAll || S.me.warehouses.includes(w.name)).sort((a, b) => (a.order ?? 99) - (b.order ?? 99) || String(a.name).localeCompare(String(b.name), 'zh-TW'));
+    S.custs = custs;
+    const lastWh = LS.get('pkg_calc_wh');
+    S.wh = S.whs.some(w => w.id === lastWh) ? lastWh : (S.whs[0]?.id || '');
+    const lastCid = LS.get('pkg_calc_cid');
+    S.cid = whCusts().some(c => c.id === lastCid) ? lastCid : '';
+    renderShell();
+    if(S.cid) await loadCustomer();
+    else render();
+  }catch(e){ renderMsg('讀取帳號資料失敗：' + esc(e.message), true); }
+});
+
+function whCusts(){ return S.custs.filter(c => c.wh === S.wh).sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-TW')); }
+
+async function doLogin(){ try{ await api.login(); }catch(e){ toast(e.message, 6000); } }
+function doLogout(){ api.logout(); }
+
+async function pickWh(id){ S.wh = id; LS.set('pkg_calc_wh', id); S.cid = ''; S.procs = []; S.rules = null; clearFile(); renderShell(); render(); }
+async function pickCust(id){ S.cid = id; LS.set('pkg_calc_cid', id); clearFile(); await loadCustomer(); }
+
+async function loadCustomer(){
+  S.procs = []; S.rules = null; S.pendingRules = null;
+  if(!S.cid){ render(); return; }
+  $('app-main').innerHTML = '<div class="center muted">讀取客戶資料中…</div>';
+  try{
+    const [procs, rules] = await Promise.all([api.processes(S.cid), api.getRules(S.cid)]);
+    S.procs = procs.sort((a, b) => (a.order !== undefined && b.order !== undefined) ? a.order - b.order : String(a.name).localeCompare(String(b.name), 'zh-TW'));
+    S.rules = rules;
+  }catch(e){ toast('讀取客戶資料失敗：' + e.message, 5000); }
+  if(S.buf) recompute();
+  render();
+}
+const curCust = () => S.custs.find(c => c.id === S.cid);
+const pkgOptions = () => S.procs.filter(isConsumable).map(p => p.name);
+
+/* ================= 畫面骨架 ================= */
+function renderLogin(){
+  $('who').textContent = ''; $('btn-logout').style.display = 'none';
+  $('app').innerHTML = `<div class="center"><div style="font-size:44px">📦</div><h2 style="margin:12px 0 6px">包材計算工具</h2>
+    <p class="muted" style="margin-bottom:18px">使用 ERP（工序計費）的 Google 帳號登入</p>
+    <button class="btn" onclick="doLogin()">用 Google 登入</button></div>`;
+}
+function renderMsg(html, logout){
+  $('app').innerHTML = `<div class="center"><p>${html}</p>${logout ? '<p style="margin-top:14px"><button class="btn ghost" onclick="doLogout()">登出</button></p>' : ''}</div>`;
+}
+function renderShell(){
+  const cs = whCusts();
+  $('app').innerHTML = `
+    <div class="pickbar">
+      <label>倉庫</label>
+      <select onchange="pickWh(this.value)">${S.whs.map(w => `<option value="${esc(w.id)}" ${w.id === S.wh ? 'selected' : ''}>${esc(w.name)}</option>`).join('') || '<option>（沒有可用的倉庫）</option>'}</select>
+      <label>客戶</label>
+      <select onchange="pickCust(this.value)"><option value="">— 請選擇客戶 —</option>${cs.map(c => `<option value="${esc(c.id)}" ${c.id === S.cid ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
+    </div>
+    <div class="nav-tabs">
+      <div class="nav-tab ${S.tab === 'calc' ? 'active' : ''}" onclick="switchTab('calc')">🧮 計算包材</div>
+      <div class="nav-tab ${S.tab === 'rules' ? 'active' : ''}" onclick="switchTab('rules')">⚙️ 規則設定</div>
+    </div>
+    <div class="main" id="app-main"></div>`;
+}
+function switchTab(t){ S.tab = t; renderShell(); render(); }
+function render(){
+  const m = $('app-main'); if(!m) return;
+  if(!S.cid){ m.innerHTML = '<div class="center muted">請先在上方選擇倉庫和客戶</div>'; return; }
+  m.innerHTML = S.tab === 'calc' ? calcHtml() : rulesHtml();
+}
+
+/* ================= 出貨明細解析 ================= */
+const FIELDS = {
+  id:     {label:'單號',     keys:['單號','订单号','單號碼','訂單編號','訂單號碼','訂單號','订单编号','orderid','order_id','訂單id']},
+  qty:    {label:'數量',     keys:['數量','数量','qty','quantity','件數','出貨數量']},
+  name:   {label:'商品名稱', keys:['商品名稱','商品名称','品名','商品','product','productname']},
+  sku:    {label:'商品編號', keys:['商品編號','商品编号','sku','品號','貨號','商品代號','料號']},
+  recv:   {label:'收件人',   keys:['收件人','收件人姓名','收貨人']},
+  addr:   {label:'收件人地址', keys:['收件人地址','地址','收貨地址','門市']},
+  ship:   {label:'物流方式', keys:['物流方式','配送方式','運送方式','物流','出貨方式','配送']},
+  sender: {label:'寄件人',   keys:['寄件人','寄件人名稱']},
+  date:   {label:'訂單日期', keys:['訂單日期','出貨日期','日期']},
+};
+const normH = s => String(s ?? '').replace(/\s+/g, '').toLowerCase();
+
+// 依表頭文字找欄位：先完全相符，找不到再找「包含」關鍵字的欄（取最短的表頭）
+function mapHeaders(row){
+  const hs = row.map(normH), map = {}, used = new Set();
+  for(const [f, def] of Object.entries(FIELDS)){
+    const keys = def.keys.map(normH);
+    const i = hs.findIndex((h, j) => h && !used.has(j) && keys.includes(h));
+    if(i >= 0){ map[f] = i; used.add(i); }
+  }
+  for(const [f, def] of Object.entries(FIELDS)){
+    if(map[f] !== undefined) continue;
+    const keys = def.keys.map(normH);
+    let best = -1;
+    hs.forEach((h, j) => { if(h && !used.has(j) && keys.some(k => h.includes(k)) && (best < 0 || h.length < hs[best].length)) best = j; });
+    if(best >= 0){ map[f] = best; used.add(best); }
+  }
+  return map;
+}
+
+function cellDate(v){
+  if(typeof v === 'number' && v > 20000 && v < 80000){ const d = XLSX.SSF.parse_date_code(v); return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`; }
+  return String(v ?? '').trim().slice(0, 10);
+}
+
+function parseWorkbook(wb){
+  return wb.SheetNames.map(name => {
+    const ws = wb.Sheets[name];
+    const aoa = XLSX.utils.sheet_to_json(ws, {header:1, defval:'', raw:true, blankrows:true});
+    const sh = {name, ok:false, reason:'', headerRow:-1, map:{}, headers:[], rows:[], lastCol:0};
+    for(let r = 0; r < Math.min(aoa.length, 15); r++){
+      const m = mapHeaders(aoa[r] || []);
+      if(m.id !== undefined && m.qty !== undefined){ sh.headerRow = r; sh.map = m; sh.headers = aoa[r]; break; }
+    }
+    if(sh.headerRow < 0){ sh.reason = aoa.length ? '找不到「單號」和「數量」表頭' : '空白分頁'; return sh; }
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+    sh.lastCol = range.e.c;
+    const g = (row, f) => sh.map[f] === undefined ? '' : row[sh.map[f]];
+    for(let r = sh.headerRow + 1; r < aoa.length; r++){
+      const row = aoa[r] || [];
+      const id = String(g(row, 'id') ?? '').trim();
+      const qty = Number(g(row, 'qty'));
+      if(!id || /^(總計|合計|小計|total)$/i.test(id) || !(qty > 0)) continue;
+      sh.rows.push({r, id, qty, name:String(g(row, 'name') ?? '').trim(), sku:String(g(row, 'sku') ?? '').trim(),
+        recv:String(g(row, 'recv') ?? '').trim(), addr:String(g(row, 'addr') ?? '').trim(), ship:String(g(row, 'ship') ?? '').trim(),
+        sender:String(g(row, 'sender') ?? '').trim(), date:g(row, 'date') === '' ? '' : cellDate(g(row, 'date'))});
+    }
+    if(!sh.rows.length){ sh.reason = '有表頭但沒有數量大於 0 的明細'; return sh; }
+    sh.ok = true; sh.use = true;
+    return sh;
+  });
+}
+
+function handleFile(file){
+  if(!file) return;
+  if(!S.rules){ toast('這個客戶還沒有包材規則，請先到「規則設定」建立'); }
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{
+      S.buf = e.target.result;
+      const wb = XLSX.read(new Uint8Array(S.buf), {type:'array'});
+      S.filename = file.name;
+      S.sheets = parseWorkbook(wb);
+      S.overrides = {};
+      recompute(); render();
+    }catch(err){ toast('讀取失敗：' + err.message, 5000); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+function clearFile(){ S.buf = null; S.filename = ''; S.sheets = []; S.orders = []; S.overrides = {}; }
+function resetFile(){ clearFile(); render(); }
+function toggleSheet(i, on){ S.sheets[i].use = on; recompute(); render(); }
+
+/* ================= 包材計算 ================= */
+function chOrder(rules){ return rules.channels || []; }
+
+// 該通路的件數規則：有專屬規則就用專屬的，沒有就用「通路空白」的共用規則
+function rangeRules(R, ch){
+  const own = (R.rules || []).filter(r => r.ch && r.ch === ch);
+  return (own.length ? own : (R.rules || []).filter(r => !r.ch)).slice().sort((a, b) => a.min - b.min);
+}
+
+function detectChannel(R, o){
+  const chs = chOrder(R);
+  const hit = text => chs.find(c => [c.name, ...(c.keywords || [])].some(k => k && text.toLowerCase().includes(String(k).toLowerCase())));
+  for(const t of o.shipTexts){ const c = hit(t); if(c) return {ch:c.name, by:'物流方式「' + t + '」'}; }
+  for(const t of o.sheetNames){ const c = hit(t); if(c) return {ch:c.name, by:'分頁「' + t + '」'}; }
+  return {ch:'', by:''};
+}
+
+function itemPoint(R, it){
+  const pts = R.points || [];
+  if(!pts.length) return {pt:1, set:true};
+  const bySku = it.sku && pts.find(p => p.sku && String(p.sku).trim().toLowerCase() === it.sku.toLowerCase());
+  if(bySku) return {pt:Number(bySku.pt) || 0, set:true};
+  const byKw = pts.find(p => p.kw && it.name.includes(String(p.kw).trim()));
+  if(byKw) return {pt:Number(byKw.pt) || 0, set:true};
+  return {pt:1, set:false};
+}
+
+function recompute(){
+  const R = S.rules;
+  const map = new Map();
+  S.sheets.forEach(sh => {
+    if(!sh.ok || !sh.use) return;
+    sh.rows.forEach(row => {
+      let o = map.get(row.id);
+      if(!o){ o = {id:row.id, recv:row.recv, addr:row.addr, shipTexts:new Set(), sheetNames:new Set(), items:[], dates:new Set(), senders:new Set()}; map.set(row.id, o); }
+      if(row.ship) o.shipTexts.add(row.ship);
+      o.sheetNames.add(sh.name);
+      if(row.date) o.dates.add(row.date);
+      if(row.sender) o.senders.add(row.sender);
+      o.items.push({name:row.name, sku:row.sku, qty:row.qty});
+    });
+  });
+  S.orders = [...map.values()].map(o => {
+    o.qty = o.items.reduce((s, it) => s + it.qty, 0);
+    o.flags = [];
+    if(!R){ o.ch = ''; o.count = o.qty; o.pts = o.qty; o.auto = ''; return o; }
+    const d = detectChannel(R, o); o.ch = d.ch; o.chBy = d.by;
+    if(!o.ch) o.flags.push('unclassified');
+    const usePts = (R.points || []).length > 0;
+    let pts = 0, unset = 0;
+    o.items.forEach(it => { const p = itemPoint(R, it); it.pt = p.pt; it.unset = !p.set; pts += p.pt * it.qty; if(!p.set) unset++; });
+    o.pts = Math.round(pts * 100) / 100;
+    o.count = usePts ? Math.ceil(o.pts - 1e-9) : o.qty;
+    if(unset) o.flags.push('unsetPoint');
+    // 1. 組合規則（該通路或通路空白；關鍵字全部出現在品名才套用）
+    let pkg = '', why = '';
+    for(const c of (R.combos || [])){
+      if(c.ch && c.ch !== o.ch) continue;
+      const kws = splitKw(c.keywords);
+      if(kws.length && kws.every(k => o.items.some(it => it.name.includes(k) || it.sku === k))){ pkg = c.pkg; why = '組合規則：' + kws.join('＋'); break; }
+    }
+    // 2. 件數規則
+    if(!pkg){
+      const rr = rangeRules(R, o.ch);
+      const r = rr.find(x => o.count >= x.min && o.count <= x.max);
+      if(r){ pkg = r.pkg; why = `${usePts ? '點數' : '件數'} ${o.count}（${r.min}–${r.max >= 9999 ? '以上' : r.max}）`; }
+    }
+    if(!pkg) o.flags.push('noRule');
+    o.auto = pkg; o.why = why;
+    return o;
+  });
+  applyFinal();
+}
+
+// 最終包材＝手動修改優先，再判斷是否超出通路上限
+function applyFinal(){
+  const R = S.rules;
+  S.orders.forEach((o, i) => {
+    o.idx = i;
+    o.pkg = S.overrides[o.id] || o.auto;
+    o.edited = !!S.overrides[o.id] && S.overrides[o.id] !== o.auto;
+    o.flags = o.flags.filter(f => f !== 'over');
+    if(R && o.ch && o.pkg){
+      const ch = chOrder(R).find(c => c.name === o.ch);
+      if(ch && ch.maxPkg){
+        const rank = name => { const rr = rangeRules(R, o.ch); const i2 = rr.findIndex(r => r.pkg === name); return i2; };
+        const a = rank(o.pkg), b = rank(ch.maxPkg);
+        if(a >= 0 && b >= 0 && a > b) o.flags.push('over');
+      }
+    }
+  });
+}
+function setOv(i, v){
+  const o = S.orders[i]; if(!o) return;
+  if(!v || v === o.auto) delete S.overrides[o.id]; else S.overrides[o.id] = v;
+  applyFinal(); render();
+}
+
+/* ================= 計算畫面 ================= */
+const FLAG = {
+  unclassified:{t:'未分類通路', c:'red'},
+  noRule:{t:'無對應規則', c:'red'},
+  over:{t:'⚠ 超出通路上限，需拆單或改宅配', c:'red'},
+  unsetPoint:{t:'有商品未設點數（以 1 計）', c:'warn'},
+};
+
+function calcHtml(){
+  const cust = curCust();
+  let h = '';
+  if(!S.rules) h += `<div class="alert warn">「${esc(cust?.name)}」還沒有包材規則。請到 <a href="#" onclick="switchTab('rules');return false">⚙️ 規則設定</a> 下載範本、填好後上傳。</div>`;
+  if(!S.buf){
+    return h + `<div class="upload-zone" id="dz">
+      <input type="file" accept=".xlsx,.xls,.csv" onchange="handleFile(this.files[0])">
+      <div class="ic">📂</div><h3>上傳「${esc(cust?.name)}」的出貨明細</h3>
+      <p class="muted small" style="margin-top:6px">會自動讀取所有含「單號」「數量」表頭的分頁（例如宅配、超取），樞紐表等其他分頁自動略過</p></div>`;
+  }
+  // 識別關鍵字檢查
+  const R = S.rules;
+  if(R && (R.identify || []).length){
+    const pool = [S.filename, ...S.orders.flatMap(o => [o.id, ...o.senders])].join(' ').toLowerCase();
+    const hit = R.identify.filter(k => pool.includes(String(k).toLowerCase()));
+    if(!hit.length) h += `<div class="alert danger">⚠ 這份檔案找不到「${esc(cust?.name)}」的識別關鍵字（${R.identify.map(esc).join('、')}），請確認上方選的客戶是否正確。</div>`;
+  }
+  h += `<div class="card"><h3>📄 ${esc(S.filename)} <button class="btn ghost small" onclick="resetFile()">換一份檔案</button></h3>
+    <div class="table-wrap"><table><thead><tr><th>計算</th><th>分頁</th><th>狀態</th><th>欄位對應（依表頭文字）</th></tr></thead><tbody>
+    ${S.sheets.map((sh, i) => `<tr>
+      <td>${sh.ok ? `<input type="checkbox" ${sh.use ? 'checked' : ''} onchange="toggleSheet(${i}, this.checked)">` : ''}</td>
+      <td><b>${esc(sh.name)}</b></td>
+      <td>${sh.ok ? `<span class="chip ok">讀取 ${sh.rows.length} 列／${new Set(sh.rows.map(r => r.id)).size} 單</span>` : `<span class="chip">略過</span> <span class="muted small">${esc(sh.reason)}</span>`}</td>
+      <td class="small">${sh.ok ? Object.entries(FIELDS).map(([f, d]) => sh.map[f] === undefined
+          ? `<span class="chip ${f === 'name' || f === 'ship' ? 'warn' : ''}">${d.label}：找不到</span>`
+          : `<span class="chip">${d.label}→${XLSX.utils.encode_col(sh.map[f])}欄「${esc(sh.headers[sh.map[f]])}」</span>`).join('') : ''}</td>
+    </tr>`).join('')}</tbody></table></div></div>`;
+  if(!S.orders.length) return h + '<div class="alert warn">沒有可計算的訂單，請確認分頁勾選。</div>';
+  if(!R) return h;
+
+  const cnt = f => S.orders.filter(o => o.flags.includes(f)).length;
+  const edited = S.orders.filter(o => o.edited).length;
+  const dates = [...new Set(S.orders.flatMap(o => [...o.dates]))].sort();
+  // 依 ERP 工序順序排列的彙總
+  const tally = {}; S.orders.forEach(o => { if(o.pkg) tally[o.pkg] = (tally[o.pkg] || 0) + 1; });
+  const ordered = pkgOptions();
+  Object.keys(tally).forEach(n => { if(!ordered.includes(n)) ordered.push(n); });
+  const notInErp = Object.keys(tally).filter(n => !S.procs.some(p => p.name === n));
+
+  h += `<div class="card"><h3>🧾 工序計費要輸入的數量 <span class="sub">依 ERP「${esc(cust?.name)}」耗材工序順序</span></h3>
+    <div class="stats">
+      <div class="stat"><div class="l">訂單數</div><div class="v">${S.orders.length}</div></div>
+      <div class="stat"><div class="l">商品總件數</div><div class="v">${S.orders.reduce((s, o) => s + o.qty, 0)}</div></div>
+      <div class="stat"><div class="l">訂單日期</div><div class="v" style="font-size:14px;padding-top:5px">${dates.length ? esc(dates.join('、')) : '—'}</div></div>
+      ${edited ? `<div class="stat blue"><div class="l">已手動修改</div><div class="v">${edited}</div></div>` : ''}
+      ${['unclassified', 'noRule', 'over'].map(f => cnt(f) ? `<div class="stat red"><div class="l">${FLAG[f].t.replace(/，.*/, '')}</div><div class="v">${cnt(f)}</div></div>` : '').join('')}
+      ${cnt('unsetPoint') ? `<div class="stat warn"><div class="l">含未設點數商品</div><div class="v">${cnt('unsetPoint')}</div></div>` : ''}
+    </div>
+    ${cnt('noRule') ? '<div class="alert danger">有訂單找不到對應的包材規則，這些單不會算進下方數量，請在明細裡手動選包材或補規則。</div>' : ''}
+    ${notInErp.length ? `<div class="alert danger">這些包材不是 ERP 工序名稱，工序計費找不到：${notInErp.map(esc).join('、')}</div>` : ''}
+    <div class="sum-grid">${ordered.map(n => `<div>${esc(n)}</div><div class="n ${tally[n] ? '' : 'zero'}">${tally[n] || 0}</div>`).join('')}</div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" onclick="copySummary()">📋 複製數量</button>
+      <button class="btn ghost" onclick="exportResult()">⬇ 下載原檔＋包材欄</button>
+    </div></div>`;
+
+  // 通路分組明細
+  const groups = chOrder(R).map(c => c.name);
+  if(S.orders.some(o => !o.ch)) groups.push('');
+  const opts = [...new Set([...pkgOptions(), ...rangeRules(R, '').map(r => r.pkg), ...(R.rules || []).map(r => r.pkg)])];
+  for(const g of groups){
+    const os = S.orders.filter(o => o.ch === g);
+    if(!os.length) continue;
+    const gt = {}; os.forEach(o => { if(o.pkg) gt[o.pkg] = (gt[o.pkg] || 0) + 1; });
+    const chDef = chOrder(R).find(c => c.name === g);
+    h += `<div class="card"><h3>${g ? '🚚 ' + esc(g) : '<span style="color:var(--danger)">❓ 未分類通路</span>'} <span class="sub">${os.length} 單${chDef && chDef.maxPkg ? '・上限 ' + esc(chDef.maxPkg) : ''}</span></h3>
+      <div class="row small" style="margin-bottom:10px">${Object.entries(gt).map(([n, c]) => `<span class="chip ok">${esc(n)} × ${c}</span>`).join('')}</div>
+      ${g ? '' : '<div class="alert danger">這些訂單的物流方式和分頁名稱都對不到任何通路關鍵字，暫時套用共用規則，請確認後到規則設定補關鍵字。</div>'}
+      <div class="table-wrap"><table class="orders"><thead><tr><th>單號</th><th>收件人</th><th>件數</th><th>品項</th><th>包材</th><th>提醒</th></tr></thead><tbody>
+      ${os.map(o => {
+        const red = o.flags.some(f => FLAG[f].c === 'red');
+        return `<tr class="${red ? 'flag-red' : (o.edited ? 'flag-edit' : '')}">
+          <td class="mono small">${esc(o.id)}</td>
+          <td>${esc(o.recv) || '–'}<div class="muted small">${esc(o.addr)}</div></td>
+          <td class="mono"><b>${o.qty}</b>${(R.points || []).length ? `<div class="small muted">${o.pts} 點</div>` : ''}</td>
+          <td class="items">${o.items.map(it => `${esc(it.name || it.sku)} ×${it.qty}${it.unset ? ' <span class="chip warn">未設點數</span>' : ''}`).join('<br>')}</td>
+          <td><select onchange="setOv(${o.idx}, this.value)">
+              <option value="">${o.auto ? '依規則：' + esc(o.auto) : '— 請選擇 —'}</option>
+              ${opts.map(n => `<option value="${esc(n)}" ${S.overrides[o.id] === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+            </select><div class="small muted" style="margin-top:3px">${esc(o.why || '')}</div></td>
+          <td>${o.edited ? '<span class="chip blue">已手動修改</span>' : ''}${o.flags.map(f => `<span class="chip ${FLAG[f].c}">${FLAG[f].t}</span>`).join('')}</td>
+        </tr>`; }).join('')}
+      </tbody></table></div></div>`;
+  }
+  return h;
+}
+
+function summaryLines(){
+  const tally = {}; S.orders.forEach(o => { if(o.pkg) tally[o.pkg] = (tally[o.pkg] || 0) + 1; });
+  const ordered = pkgOptions(); Object.keys(tally).forEach(n => { if(!ordered.includes(n)) ordered.push(n); });
+  return ordered.filter(n => tally[n]).map(n => [n, tally[n]]);
+}
+async function copySummary(){
+  const txt = summaryLines().map(([n, c]) => `${n}\t${c}`).join('\n');
+  try{ await navigator.clipboard.writeText(txt); toast('已複製'); }
+  catch(e){ prompt('複製以下內容：', txt.replace(/\t/g, ' ')); }
+}
+
+function exportResult(){
+  // cellNF：保留原本的數字格式，日期欄才不會變成 46352 這種序號
+  const wb = XLSX.read(new Uint8Array(S.buf), {type:'array', cellStyles:true, cellNF:true});
+  const byId = new Map(S.orders.map(o => [o.id, o]));
+  S.sheets.forEach(sh => {
+    if(!sh.ok || !sh.use) return;
+    const ws = wb.Sheets[sh.name], c = sh.lastCol + 1;
+    XLSX.utils.sheet_add_aoa(ws, [['包材']], {origin:{r:sh.headerRow, c}});
+    sh.rows.forEach(row => { const o = byId.get(row.id); XLSX.utils.sheet_add_aoa(ws, [[o ? (o.pkg || '無對應規則') + (o.edited ? '（手動）' : '') : '']], {origin:{r:row.r, c}}); });
+  });
+  const aoa = [['包材', '數量'], ...summaryLines(), [], ['單號', '收件人', '通路', '件數', '包材', '提醒']];
+  S.orders.forEach(o => aoa.push([o.id, o.recv, o.ch || '未分類', o.qty, o.pkg || '', [o.edited ? '已手動修改' : '', ...o.flags.map(f => FLAG[f].t)].filter(Boolean).join('、')]));
+  const name = '包材彙總';
+  if(wb.SheetNames.includes(name)) delete wb.Sheets[name], wb.SheetNames.splice(wb.SheetNames.indexOf(name), 1);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), name);
+  XLSX.writeFile(wb, S.filename.replace(/\.(xlsx|xls|csv)$/i, '') + '_包材_' + getTodayTW() + '.xlsx');
+}
+
+/* ================= 規則設定 ================= */
+const RULE_SHEETS = {
+  channels:{sheet:'通路設定', head:['通路', '物流方式關鍵字（逗號分隔）', '最大包材（超過就提醒，可空白）']},
+  rules:   {sheet:'件數規則', head:['通路（空白＝所有通路共用）', '下限', '上限', '包材']},
+  combos:  {sheet:'組合規則', head:['通路（空白＝所有通路）', '關鍵字（逗號分隔，全部出現才套用）', '包材']},
+  points:  {sheet:'商品點數', head:['商品編號', '商品名稱關鍵字', '點數']},
+  identify:{sheet:'識別關鍵字', head:['關鍵字（寄件人、單號開頭或檔名會出現的字）']},
+};
+const rowsOf = {
+  channels: R => (R.channels || []).map(c => [c.name, (c.keywords || []).join(','), c.maxPkg || '']),
+  rules:    R => (R.rules || []).map(r => [r.ch || '', r.min, r.max, r.pkg]),
+  combos:   R => (R.combos || []).map(c => [c.ch || '', c.keywords, c.pkg]),
+  points:   R => (R.points || []).map(p => [p.sku || '', p.kw || '', p.pt]),
+  identify: R => (R.identify || []).map(k => [k]),
+};
+
+function downloadRules(){
+  const R = S.rules || DEFAULT_RULES(), cust = curCust();
+  const wb = XLSX.utils.book_new();
+  for(const [k, def] of Object.entries(RULE_SHEETS)){
+    const ws = XLSX.utils.aoa_to_sheet([def.head, ...rowsOf[k](R)]);
+    ws['!cols'] = def.head.map(() => ({wch:26}));
+    XLSX.utils.book_append_sheet(wb, ws, def.sheet);
+  }
+  const help = [
+    ['包材計算規則說明'], [],
+    ['・包材名稱必須和 ERP 工序名稱完全相同（下方列出此客戶的工序），否則無法上傳。'],
+    ['・計算順序：先比「組合規則」（由上往下，第一條符合的就用），沒有符合再用「件數規則」。'],
+    ['・件數規則：該通路有專屬規則就只用專屬的，沒有就用「通路空白」的共用規則；上限填 9999 代表以上。'],
+    ['・商品點數：整張空白＝每件算 1；有填的話，件數改用「點數 × 數量」加總後無條件進位，沒對到的商品以 1 點計並提醒。'],
+    ['・通路：先比明細的「物流方式」欄，再比分頁名稱；通路名稱本身也會當作關鍵字。'],
+    ['・上傳後會整份取代目前的規則，請先下載最新版再修改。'], [],
+    ['ERP 工序名稱', '分類', '單價'],
+    ...S.procs.map(p => [p.name, p.category || (isConsumable(p) ? '耗材（推測）' : ''), p.price ?? '']),
+  ];
+  const hw = XLSX.utils.aoa_to_sheet(help); hw['!cols'] = [{wch:60}, {wch:14}, {wch:10}];
+  XLSX.utils.book_append_sheet(wb, hw, '說明');
+  XLSX.writeFile(wb, `包材規則_${cust?.name || ''}_${getTodayTW()}.xlsx`);
+}
+
+function readRulesFile(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{
+      const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      const {rules, errors, warns} = parseRulesWb(wb);
+      S.pendingRules = rules; S.pendingErrors = errors; S.pendingWarns = warns;
+      render();
+    }catch(err){ toast('讀取失敗：' + err.message, 5000); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function parseRulesWb(wb){
+  const errors = [], warns = [];
+  const sheet = k => {
+    const n = RULE_SHEETS[k].sheet;
+    if(!wb.Sheets[n]) return null;
+    return XLSX.utils.sheet_to_json(wb.Sheets[n], {header:1, defval:'', raw:true}).slice(1)
+      .map((r, i) => ({r: r.map(v => typeof v === 'string' ? v.trim() : v), line: i + 2}))
+      .filter(x => x.r.some(v => v !== '' && v !== null));
+  };
+  const procNames = new Set(S.procs.map(p => p.name));
+  const consum = new Set(pkgOptions());
+  const chkPkg = (name, where) => {
+    if(!name){ errors.push(`${where}：包材空白`); return; }
+    if(!procNames.has(name)) errors.push(`${where}：「${name}」不是這個客戶的 ERP 工序名稱`);
+    else if(!consum.has(name)) warns.push(`${where}：「${name}」在 ERP 不是「耗材」分類`);
+  };
+  const R = {channels:[], rules:[], combos:[], points:[], identify:[]};
+  const ch = sheet('channels');
+  if(!ch) errors.push('缺少「通路設定」分頁');
+  else ch.forEach(({r, line}) => {
+    const name = String(r[0] || '');
+    if(!name){ errors.push(`通路設定第 ${line} 列：通路名稱空白`); return; }
+    if(R.channels.some(c => c.name === name)){ errors.push(`通路設定第 ${line} 列：通路「${name}」重複`); return; }
+    const maxPkg = String(r[2] || '');
+    if(maxPkg) chkPkg(maxPkg, `通路設定第 ${line} 列`);
+    R.channels.push({name, keywords:splitKw(r[1]), maxPkg});
+  });
+  const chNames = new Set(R.channels.map(c => c.name));
+  const rr = sheet('rules');
+  if(!rr || !rr.length) errors.push('「件數規則」分頁不存在或是空的');
+  else rr.forEach(({r, line}) => {
+    const w = `件數規則第 ${line} 列`, c = String(r[0] || ''), min = Number(r[1]), max = Number(r[2]), pkg = String(r[3] || '');
+    if(c && !chNames.has(c)) errors.push(`${w}：通路「${c}」沒有在通路設定裡`);
+    if(!Number.isFinite(min) || !Number.isFinite(max) || r[1] === '' || r[2] === '') errors.push(`${w}：下限／上限要填數字`);
+    else if(min > max) errors.push(`${w}：下限大於上限`);
+    chkPkg(pkg, w);
+    R.rules.push({ch:c, min, max, pkg});
+  });
+  // 同一通路的區間不能重疊
+  [...new Set(R.rules.map(r => r.ch))].forEach(c => {
+    const xs = R.rules.filter(r => r.ch === c).sort((a, b) => a.min - b.min);
+    for(let i = 1; i < xs.length; i++) if(xs[i].min <= xs[i - 1].max) errors.push(`件數規則：${c || '共用'}的 ${xs[i - 1].min}–${xs[i - 1].max} 和 ${xs[i].min}–${xs[i].max} 重疊`);
+    for(let i = 1; i < xs.length; i++) if(xs[i].min > xs[i - 1].max + 1) warns.push(`件數規則：${c || '共用'}的 ${xs[i - 1].max} 和 ${xs[i].min} 之間有空檔，落在中間的單會「無對應規則」`);
+  });
+  R.channels.forEach(c => { if(!R.rules.some(r => r.ch === c.name) && !R.rules.some(r => !r.ch)) errors.push(`通路「${c.name}」沒有任何件數規則（也沒有共用規則）`); });
+  (sheet('combos') || []).forEach(({r, line}) => {
+    const w = `組合規則第 ${line} 列`, c = String(r[0] || '');
+    if(c && !chNames.has(c)) errors.push(`${w}：通路「${c}」沒有在通路設定裡`);
+    if(!splitKw(r[1]).length) errors.push(`${w}：關鍵字空白`);
+    chkPkg(String(r[2] || ''), w);
+    R.combos.push({ch:c, keywords:splitKw(r[1]).join(','), pkg:String(r[2] || '')});
+  });
+  (sheet('points') || []).forEach(({r, line}) => {
+    const w = `商品點數第 ${line} 列`, pt = Number(r[2]);
+    if(!r[0] && !r[1]) errors.push(`${w}：商品編號和關鍵字至少填一個`);
+    if(!Number.isFinite(pt) || r[2] === '' || pt < 0) errors.push(`${w}：點數要填 0 以上的數字`);
+    R.points.push({sku:String(r[0] || ''), kw:String(r[1] || ''), pt});
+  });
+  (sheet('identify') || []).forEach(({r}) => { if(r[0] !== '') R.identify.push(String(r[0])); });
+  return {rules:R, errors, warns};
+}
+
+function diffHtml(oldR, newR){
+  let h = '', changes = 0;
+  for(const [k, def] of Object.entries(RULE_SHEETS)){
+    const a = (oldR ? rowsOf[k](oldR) : []).map(r => r.join(' ｜ '));
+    const b = rowsOf[k](newR).map(r => r.join(' ｜ '));
+    const add = b.filter(x => !a.includes(x)), del = a.filter(x => !b.includes(x));
+    changes += add.length + del.length;
+    h += `<div style="margin-top:8px"><b>${def.sheet}</b> <span class="muted small">${b.length} 列</span>
+      ${add.length || del.length ? '' : ' <span class="chip">沒有變更</span>'}
+      ${del.map(x => `<div class="small diff-del">－ ${esc(x)}</div>`).join('')}${add.map(x => `<div class="small diff-add">＋ ${esc(x)}</div>`).join('')}</div>`;
+  }
+  return {h, changes};
+}
+
+async function confirmRules(){
+  if(!S.pendingRules || S.pendingErrors.length) return;
+  const cust = curCust(), wh = S.whs.find(w => w.id === S.wh);
+  const data = {...S.pendingRules, cid:S.cid, cname:cust?.name || '', wh:S.wh, whName:wh?.name || '',
+    updatedAt:Date.now(), updatedBy:S.me.email, updatedByName:S.me.name, version:PKG_VERSION};
+  try{
+    await api.saveRules(S.cid, data);
+    S.rules = data; S.pendingRules = null; toast('規則已更新');
+    if(S.buf) recompute();
+    render();
+  }catch(e){ toast('儲存失敗：' + e.message, 5000); }
+}
+function cancelRules(){ S.pendingRules = null; render(); }
+
+function tableHtml(head, rows){
+  if(!rows.length) return '<div class="muted small">（空白）</div>';
+  return `<div class="table-wrap"><table><thead><tr>${head.map(x => `<th>${esc(x)}</th>`).join('')}</tr></thead><tbody>
+    ${rows.map(r => `<tr>${r.map(v => `<td>${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+function rulesHtml(){
+  const R = S.rules, cust = curCust();
+  let h = '';
+  h += `<div class="card"><h3>⚙️ 「${esc(cust?.name)}」的包材規則</h3>
+    ${R ? `<div class="muted small" style="margin-bottom:10px">最後修改：${esc(R.updatedByName || R.updatedBy || '')}・${esc(fmtTime(R.updatedAt))}</div>`
+        : '<div class="alert info">還沒有規則。先下載範本（已填入預設的紙箱規則），把包材名稱改成下方 ERP 工序名稱後上傳。</div>'}
+    <div class="row">
+      <button class="btn ghost" onclick="downloadRules()">⬇ ${R ? '下載目前規則' : '下載範本'}（Excel）</button>
+      <label class="btn" style="position:relative;overflow:hidden">⬆ 上傳規則 Excel<input type="file" accept=".xlsx,.xls" style="position:absolute;inset:0;opacity:0;cursor:pointer" onchange="readRulesFile(this.files[0]);this.value=''"></label>
+    </div></div>`;
+
+  if(S.pendingRules){
+    const d = diffHtml(R, S.pendingRules);
+    h += `<div class="card" style="border-color:var(--accent)"><h3>📝 上傳內容確認</h3>
+      ${S.pendingErrors.length ? `<div class="alert danger"><b>有 ${S.pendingErrors.length} 個錯誤，請修正後重新上傳：</b><br>${S.pendingErrors.map(esc).join('<br>')}</div>` : ''}
+      ${S.pendingWarns.length ? `<div class="alert warn">${S.pendingWarns.map(esc).join('<br>')}</div>` : ''}
+      ${d.h}
+      <div class="row" style="margin-top:14px">
+        <button class="btn" ${S.pendingErrors.length || (!d.changes && R) ? 'disabled' : ''} onclick="confirmRules()">確認取代目前規則</button>
+        <button class="btn ghost" onclick="cancelRules()">取消</button>
+        ${!d.changes && R ? '<span class="muted small">內容和目前規則一樣</span>' : ''}
+      </div></div>`;
+  }
+
+  if(R){
+    h += `<div class="card"><h3>通路設定</h3>${tableHtml(['通路', '物流方式關鍵字', '最大包材'], rowsOf.channels(R))}</div>
+      <div class="card"><h3>件數規則</h3>${tableHtml(['通路', '下限', '上限', '包材'], rowsOf.rules(R).map(r => [r[0] || '（共用）', r[1], r[2] >= 9999 ? '以上' : r[2], r[3]]))}</div>
+      <div class="card"><h3>組合規則</h3>${tableHtml(['通路', '關鍵字', '包材'], rowsOf.combos(R).map(r => [r[0] || '（全部）', r[1], r[2]]))}</div>
+      <div class="card"><h3>商品點數 <span class="sub">空白＝每件算 1</span></h3>${tableHtml(['商品編號', '商品名稱關鍵字', '點數'], rowsOf.points(R))}</div>
+      <div class="card"><h3>識別關鍵字</h3>${tableHtml(['關鍵字'], rowsOf.identify(R))}</div>`;
+  }
+  const cons = S.procs.filter(isConsumable);
+  h += `<div class="card"><h3>📋 ERP 工序（${esc(cust?.name)}） <span class="sub">包材必須用這裡的名稱</span></h3>
+    ${cons.length ? '' : '<div class="alert warn">這個客戶在 ERP 沒有「耗材」分類的工序，請先到工序計費建立包材工序。</div>'}
+    ${tableHtml(['工序名稱', '分類', '單價'], S.procs.map(p => [p.name, p.category || (isConsumable(p) ? '耗材（推測）' : '未分類'), p.price ?? '']))}</div>`;
+  return h;
+}
+
+/* ================= 拖放上傳 ================= */
+document.addEventListener('dragover', e => { const dz = $('dz'); if(dz){ e.preventDefault(); dz.classList.add('drag'); } });
+document.addEventListener('dragleave', e => { const dz = $('dz'); if(dz && e.target === dz) dz.classList.remove('drag'); });
+document.addEventListener('drop', e => { const dz = $('dz'); if(dz){ e.preventDefault(); dz.classList.remove('drag'); handleFile(e.dataTransfer.files[0]); } });
+
+$('ver').textContent = PKG_VERSION + (DEMO ? '・測試模式' : '');
+</script>
+</body>
+</html>
